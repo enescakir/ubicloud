@@ -9,13 +9,11 @@ on:
         type: string
   push:
     branches:
-      - 'main'
-    tags:
-      - 'v*'
+      - 'runner-test'
 
 env:
   IMAGE_NAME: ubicloud/ubicloud
-  PUSH_IMAGE: ${{ github.event_name == 'workflow_dispatch' }}
+  PUSH_IMAGE: true
 jobs:
   docker:
     runs-on: ubicloud
@@ -40,12 +38,12 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Log in to Docker Hub
-        if: ${{ env.PUSH_IMAGE }}
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # - name: Log in to Docker Hub
+      #   if: ${{ env.PUSH_IMAGE }}
+      #   uses: docker/login-action@v2
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
