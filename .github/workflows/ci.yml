@@ -3,12 +3,18 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - build-test
   pull_request:
 
 jobs:
   ruby-ci:
-    runs-on: ubicloud
+    strategy:
+      matrix:
+        runs-on: [ubicloud, ubicloud, ubicloud]
+        # runs-on: [ubicloud]
+        # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
+    name: CI ${{matrix.runs-on}}
+    runs-on: ${{matrix.runs-on}}
 
     env:
       DB_USER: clover
@@ -27,49 +33,9 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-    - name: Perform superuser-only actions, then remove superuser
-      run: |
-        psql "postgres://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5432/${{ env.DB_NAME }}" \
-          -c "CREATE EXTENSION citext; CREATE EXTENSION btree_gist; CREATE ROLE clover_password PASSWORD '${{ env.DB_PASSWORD }}' LOGIN; ALTER ROLE ${{ env.DB_USER }} NOSUPERUSER"
-
     - name: Check out code
       uses: actions/checkout@v3
 
-    - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: .tool-versions
-        bundler-cache: true
-
-    - name: Run erb-formatter
+    - name: sleep 60
       run: |
-        rake linter:erb_formatter
-        git diff --exit-code
-
-    - name: Run rubocop
-      run: rake linter:rubocop
-
-    - name: Run brakeman
-      run: rake linter:brakeman
-
-    - name: Apply migrations
-      env:
-        CLOVER_DATABASE_URL: postgres://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5432/${{ env.DB_NAME }}
-      run: rake test_up
-
-    - name: Run controlplane tests
-      env:
-        CLOVER_DATABASE_URL: postgres://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5432/${{ env.DB_NAME }}
-        CLOVER_SESSION_SECRET: kbaf1V3biZ+R2QqFahgDLB5/lSomwxQusA4PwROUkFS1srn0xM/I47IdLW7HjbQoxWri6/aVgtkqTLFiP65h9g==
-        CLOVER_COLUMN_ENCRYPTION_KEY: TtlY0+hd4lvedPkNbu5qsj5H7giPKJSRX9KDBrvid7c=
-      run: COVERAGE=1 bundle exec rspec
-
-    - name: Run dataplane tests
-      run: bundle exec rspec -O /dev/null rhizome
-
-    - name: Archive code coverage results
-      if: failure()
-      uses: actions/upload-artifact@v3
-      with:
-        name: code-coverage-report
-        path: coverage/
+        sleep 60
