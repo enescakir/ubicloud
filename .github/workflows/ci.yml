@@ -10,7 +10,7 @@ jobs:
   ruby-ci:
     strategy:
       matrix:
-        runs-on: [ubicloud, ubicloud, ubicloud]
+        runs-on: [ubicloud, ubuntu-latest]
         # runs-on: [ubicloud]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
@@ -33,9 +33,18 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-    - name: Check out code
-      uses: actions/checkout@v3
-
-    - name: sleep 60
-      run: |
-        sleep 60
+      - name: printenv
+        run: |
+          printenv
+      - name: .env
+        run: |
+          cat /home/runner/actions-runner/.env || true
+      - name: echo XDG_CONFIG_HOME
+        run: |
+          echo "$XDG_CONFIG_HOME"
+      - name: cat /etc/environment
+        run: |
+          cat /etc/environment
+      - name: mkdir ${XDG_CONFIG_HOME}/kustomize
+        run: |
+          mkdir ${XDG_CONFIG_HOME}/kustomize
