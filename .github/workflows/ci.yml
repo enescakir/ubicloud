@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
-        runs-on: [ubicloud, ubicloud, ubicloud]
+        runs-on: [ubuntu-latest, ubuntu-latest, ubuntu-latest]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -33,18 +33,5 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-      - name: printenv
-        run: |
-          printenv
-      - name: .env
-        run: |
-          cat /home/runner/actions-runner/.env || true
-      - name: echo XDG_CONFIG_HOME
-        run: |
-          echo "$XDG_CONFIG_HOME"
-      - name: cat /etc/environment
-        run: |
-          cat /etc/environment
-      - name: mkdir ${XDG_CONFIG_HOME}/kustomize
-        run: |
-          mkdir ${XDG_CONFIG_HOME}/kustomize
+      - name: nproc
+        run: nproc
