@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
-        runs-on: [ubuntu-latest, ubuntu-latest, ubuntu-latest]
+        runs-on: [ubicloud-standard-2-ubuntu-2204, ubuntu-latest]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -21,17 +21,60 @@ jobs:
       DB_PASSWORD: nonempty
       DB_NAME: clover_test
 
-    services:
-      postgres:
-        image: postgres:15.4
-        env:
-          POSTGRES_USER: ${{ env.DB_USER }}
-          POSTGRES_PASSWORD: ${{ env.DB_PASSWORD }}
-          POSTGRES_DB: ${{ env.DB_NAME }}
-        ports:
-          - 5432:5432
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
     steps:
-      - name: nproc
-        run: nproc
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: uname -mr
+        run: uname -mr
+
+      - name: lsb_release -a
+        run: lsb_release -a
+
+      - name: printenv
+        run: printenv
+
+      - name: ls -lah
+        run: ls -lah
+
+      - name: ls -lah /home/runner
+        run: ls -lah /home/runner
+
+      - name: ls -lah /home/runner/runners || true
+        run: ls -lah /home/runner/runners || true
+
+      - name: ls -lah /home/runner/runners/2.312.0 || true
+        run: ls -lah /home/runner/runners/2.312.0 || true
+
+      - name: ls -lah /home/runner/actions-runner || true
+        run: ls -lah /home/runner/actions-runner || true
+
+      - name: sudo -l
+        run: sudo -l
+
+      - name: sudo ls -lah /etc/sudoers.d
+        run: sudo ls -lah /etc/sudoers.d
+
+      - name: sudo cat /etc/sudoers.d/runner || true
+        run: sudo cat /etc/sudoers.d/runner || true
+
+      - name: docker run -d -v "$(pwd)":/workspace --name alpine alpine tail -f /dev/null
+        run: docker run -d -v "$(pwd)":/workspace --name alpine alpine tail -f /dev/null
+
+      - name: docker exec alpine ls -lah
+        run: docker exec alpine ls -lah
+
+      - name: docker exec alpine ls -lah /workspace
+        run: docker exec alpine ls -lah /workspace
+
+      - name: docker exec alpine touch /workspace/test.txt
+        run: docker exec alpine touch /workspace/test.txt
+
+      - name: docker exec alpine ls -lah /workspace
+        run: docker exec alpine ls -lah /workspace
+
+      - name: cat /etc/group
+        run: cat /etc/group
+
+      - name: groups runner
+        run: groups runner
