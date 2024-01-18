@@ -23,10 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubicloud-standard-8
+          - runner: ubicloud-standard-2-ubuntu-2004
             platform: linux/amd64
-          - runner: ubicloud-standard-8-arm
-            platform: linux/arm64
+          - runner: ubicloud-standard-2-ubuntu-2204
+            platform: linux/amd64
 
     steps:
       - name: Check out code
@@ -47,11 +47,11 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # - name: Log in to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push by digest
         id: build
@@ -107,11 +107,11 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # - name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
