@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
-        runs-on: [ubicloud-standard-2-ubuntu-2204, ubuntu-latest]
+        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2004]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -36,6 +36,9 @@ jobs:
 
       - name: ls -lah
         run: ls -lah
+
+      - name: df -Th
+        run: df -Th
 
       - name: ls -lah /home/runner
         run: ls -lah /home/runner
@@ -78,3 +81,18 @@ jobs:
 
       - name: groups runner
         run: groups runner
+
+      - name: cat /proc/meminfo
+        run: cat /proc/meminfo
+
+      - name: swapon -s
+        run: swapon -s
+
+      - name: free -h
+        run: free -h
+
+      - name: swapon --all --verbose
+        run: swapon --all --verbose
+
+      - name: cat /proc/swaps
+        run: cat /proc/swaps
