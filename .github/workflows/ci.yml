@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
-        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2004]
+        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204-arm]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
