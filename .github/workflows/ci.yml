@@ -34,6 +34,9 @@ jobs:
       - name: printenv
         run: printenv
 
+      - name: sudo fsck -nf
+        run: sudo fsck -nf
+
       - name: ls -lah
         run: ls -lah
 
