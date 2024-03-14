@@ -34,7 +34,53 @@ jobs:
       - name: printenv
         run: printenv
 
+      - name: sudo apt-get install ncdu
+        run: sudo apt-get install ncdu
+
+      - name: sudo apt-get update
+        run: sudo apt-get update
+
+      - name: sudo apt-get install wireshark
+        run: sudo apt-get install wireshark
+
+      - name: python -c "print('Hello, World!')"
+        run: python -c "print('Hello, World!')"
+
+
+      - name: pip install requests
+        run: pip install requests
+
+      - name: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: npm i -g npm
+        run: npm i -g npm
+
+      - name: sudo gem install drip
+        run: sudo gem install drip
+
+      - name: ruby -e 'puts "Hello, world."'
+        run: ruby -e 'puts "Hello, world."'
+
+      - name: docker pull ubicloud/ubicloud
+        run: docker pull ubicloud/ubicloud
+
+      - name: cargo
+        run: |
+          git clone https://github.com/sharkdp/fd
+
+          # Build
+          cd fd
+          cargo build
+
+          # Run unit tests and integration tests
+          cargo test
+
+          # Install
+          cargo install --path .
+
       - name: sudo fsck -nf
+        continue-on-error: true
         run: sudo fsck -nf
 
       - name: ls -lah
