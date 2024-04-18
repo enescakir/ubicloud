@@ -12,7 +12,7 @@ jobs:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
         # runs-on: [ubuntu-20.04, ubuntu-22.04, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204]
-        runs-on: [ubuntu-20.04, ubuntu-22.04, ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204, ubicloud-standard-20-arm-ubuntu-2204]
+        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -35,6 +35,17 @@ jobs:
       - name: printenv
         run: printenv
 
+      - name: echo $PATH
+        run: echo $PATH
+
+      - name: cat /home/runner/actions-runner/.env
+        continue-on-error: true
+        run: cat /home/runner/actions-runner/.env
+
+      - name: cat /etc/apt/apt-mirrors.txt
+        continue-on-error: true
+        run: cat /etc/apt/apt-mirrors.txt
+
       - name: sudo apt-get install ncdu
         run: sudo apt-get install ncdu
 
@@ -47,7 +58,6 @@ jobs:
       - name: python -c "print('Hello, World!')"
         run: python -c "print('Hello, World!')"
 
-
       - name: pip install requests
         run: pip install requests
 
@@ -55,13 +65,16 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: sudo npm i -g npm
+        continue-on-error: true
         run: sudo npm i -g npm
 
-      # - name: sudo gem install drip
-      #   run: sudo gem install drip
+      - name: sudo gem install drip
+        continue-on-error: true
+        run: sudo gem install drip
 
-      # - name: ruby -e 'puts "Hello, world."'
-      #   run: ruby -e 'puts "Hello, world."'
+      - name: ruby -e 'puts "Hello, world."'
+        continue-on-error: true
+        run: ruby -e 'puts "Hello, world."'
 
       - name: docker pull ubicloud/ubicloud
         run: docker pull ubicloud/ubicloud
@@ -96,9 +109,6 @@ jobs:
       - name: ls -lah /home/runner/runners || true
         run: ls -lah /home/runner/runners || true
 
-      - name: ls -lah /home/runner/runners/2.312.0 || true
-        run: ls -lah /home/runner/runners/2.312.0 || true
-
       - name: ls -lah /home/runner/actions-runner || true
         run: ls -lah /home/runner/actions-runner || true
 
@@ -125,6 +135,12 @@ jobs:
 
       - name: docker exec alpine ls -lah /workspace
         run: docker exec alpine ls -lah /workspace
+
+      - name: cat /etc/passwd
+        run: cat /etc/passwd
+
+      - name: loginctl show-user 1001 --property=Linger
+        run: loginctl show-user 1001 --property=Linger
 
       - name: cat /etc/group
         run: cat /etc/group
