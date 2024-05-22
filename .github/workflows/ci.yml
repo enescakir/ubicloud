@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - build-test
+      - build-test-2
   pull_request:
 
 jobs:
@@ -12,7 +12,9 @@ jobs:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
         # runs-on: [ubuntu-20.04, ubuntu-22.04, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204]
-        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204]
+        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204]
+        # runs-on: [ubuntu-latest, ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204]
+        # runs-on: [ubuntu-latest, ubicloud-gpu-standard-1-latest]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -24,7 +26,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: uname -mr
         run: uname -mr
@@ -46,14 +48,18 @@ jobs:
         continue-on-error: true
         run: cat /etc/apt/apt-mirrors.txt
 
-      - name: sudo apt-get install ncdu
-        run: sudo apt-get install ncdu
-
       - name: sudo apt-get update
         run: sudo apt-get update
 
-      - name: sudo apt-get install wireshark
-        run: sudo apt-get install wireshark
+      - name: sudo fsck -nf
+        continue-on-error: true
+        run: sudo fsck -nf
+
+      - name: sudo apt-get install ncdu
+        run: sudo apt-get install ncdu
+
+      - name: sudo apt-get install -y wireshark
+        run: sudo apt-get install -y wireshark
 
       - name: python -c "print('Hello, World!')"
         run: python -c "print('Hello, World!')"
@@ -92,10 +98,6 @@ jobs:
 
           # Install
           cargo install --path .
-
-      - name: sudo fsck -nf
-        continue-on-error: true
-        run: sudo fsck -nf
 
       - name: ls -lah
         run: ls -lah
