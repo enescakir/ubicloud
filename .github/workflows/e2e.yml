@@ -36,4 +36,4 @@ jobs:
 
     - name: run ci script
       run: |
-        ./bin/ci --test-cases=${{ github.event_name != 'workflow_dispatch' && 'vm' || inputs.test_cases }}"
+        ./bin/ci --test-cases=${{ github.event_name != 'workflow_dispatch' && 'vm' || inputs.test_cases }}
