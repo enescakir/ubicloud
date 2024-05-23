@@ -3,11 +3,18 @@ name: E2E CI
 on:
   workflow_dispatch:
     inputs:
-      test_cases:
-        description: 'Comma-separated list of test cases (vm)'
-        required: true
-        default: 'vm'
-        type: string
+      enable_vm:
+        description: Enable VM tests
+        default: true
+        type: boolean
+      enable_github_2204:
+        description: Enable GitHub Ubuntu 22.04 test
+        default: false
+        type: boolean
+      enable_github_2004:
+        description: Enable GitHub Ubuntu 20.04 test
+        default: false
+        type: boolean
 
   # schedule:
   #   - cron:  '0 */1 * * *'
@@ -36,4 +43,19 @@ jobs:
 
     - name: run ci script
       run: |
-        ./bin/ci --test-cases=${{ github.event_name != 'workflow_dispatch' && 'vm' || inputs.test_cases }}
+        test_cases=""
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ inputs.enable_vm }}" == "true" ]]; then
+             test_cases="${test_cases}vm,"
+          fi
+          if [[ "${{ inputs.enable_github_2204 }}" == "true" ]]; then
+             test_cases="${test_cases}github_runner_ubuntu_2204,"
+          fi
+          if [[ "${{ inputs.enable_github_2004 }}" == "true" ]]; then
+             test_cases="${test_cases}github_runner_ubuntu_2004,"
+          fi
+        else
+           test_cases="vm"
+        fi
+
+        ./bin/ci --test-cases=$test_cases
