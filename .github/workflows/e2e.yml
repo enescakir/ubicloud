@@ -14,7 +14,7 @@ on:
 
 jobs:
   run-ci:
-    runs-on: ubicloud
+    runs-on: ubuntu-latest
     environment: E2E-CI
     timeout-minutes: 45
     concurrency: e2e_environment
@@ -24,23 +24,7 @@ jobs:
       DB_PASSWORD: nonempty
       DB_NAME: clover_test
 
-    services:
-      postgres:
-        image: postgres:15.4
-        env:
-          POSTGRES_USER: ${{ env.DB_USER }}
-          POSTGRES_PASSWORD: ${{ env.DB_PASSWORD }}
-          POSTGRES_DB: ${{ env.DB_NAME }}
-        ports:
-          - 5432:5432
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
     steps:
-    - name: Perform superuser-only actions, then remove superuser
-      run: |
-        psql "postgres://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5432/${{ env.DB_NAME }}" \
-          -c "CREATE EXTENSION citext; CREATE EXTENSION btree_gist; CREATE ROLE clover_password PASSWORD '${{ env.DB_PASSWORD }}' LOGIN; ALTER ROLE ${{ env.DB_USER }} NOSUPERUSER"
-
     - name: Check out code
       uses: actions/checkout@v4
 
@@ -50,59 +34,6 @@ jobs:
         ruby-version: .tool-versions
         bundler-cache: true
 
-    - name: Apply migrations
-      env:
-        CLOVER_DATABASE_URL: postgres://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5432/${{ env.DB_NAME }}
-      run: bundle exec rake test_up
-
-    - name: Install foreman
-      run: gem install foreman
-
-    - name: Add e2e script to Procfile
+    - name: run ci script
       run: |
-        echo "e2e: bin/ci --test-cases=${{ github.event_name != 'workflow_dispatch' && 'vm' || inputs.test_cases }}" >> Procfile
-
-    - name: Run services
-      env:
-        RACK_ENV: development
-        CLOVER_DATABASE_URL: postgres://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5432/${{ env.DB_NAME }}
-        CLOVER_SESSION_SECRET: kbaf1V3biZ+R2QqFahgDLB5/lSomwxQusA4PwROUkFS1srn0xM/I47IdLW7HjbQoxWri6/aVgtkqTLFiP65h9g==
-        CLOVER_COLUMN_ENCRYPTION_KEY: TtlY0+hd4lvedPkNbu5qsj5H7giPKJSRX9KDBrvid7c=
-        CI_HETZNER_SACRIFICIAL_SERVER_ID: ${{ secrets.CI_HETZNER_SACRIFICIAL_SERVER_ID }}
-        HETZNER_USER: ${{ secrets.HETZNER_USER }}
-        HETZNER_PASSWORD: ${{ secrets.HETZNER_PASSWORD }}
-      run: timeout 40m foreman start
-
-    - name: Send notification if failed
-      if: ${{ failure() && github.ref_name == 'main' }}
-      uses: slackapi/slack-github-action@v1.26.0
-      with:
-        payload: |
-          {
-            "text": "*E2E Tests Failed* :this-is-fine-fire:",
-            "attachments": [
-              {
-                "color": "E33122",
-                "fields": [
-                  {
-                    "title": "Event",
-                    "short": true,
-                    "value": "${{ github.event_name }}"
-                  },
-                  {
-                    "title": "Reference",
-                    "short": true,
-                    "value": "<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.ref_name }}>"
-                  },
-                  {
-                    "title": "Action",
-                    "short": false,
-                    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.workflow }}>"
-                  }
-                ]
-              }
-            ]
-          }
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_PAGER_URL }}
-        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        ./bin/ci --test-cases=${{ github.event_name != 'workflow_dispatch' && 'vm' || inputs.test_cases }}"
