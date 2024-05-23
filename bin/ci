@@ -56,6 +56,9 @@ OptionParser.new do |opts|
   opts.on("--test-cases TEST_CASES", Array, "List of test cases to run separated by comma") { |v| options[:test_cases] = v }
 end.parse!
 
+puts options
+exit 0
+
 clover_freeze
 
 $stdout.sync = true
