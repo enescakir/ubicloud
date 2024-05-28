@@ -13,7 +13,7 @@ jobs:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
         # runs-on: [ubuntu-20.04, ubuntu-22.04, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204]
         # runs-on: [ubuntu-latest]
-        runs-on: [self-hosted]
+        runs-on: [ubicloud]
         # runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: CI ${{matrix.runs-on}}
@@ -37,29 +37,23 @@ jobs:
       - name: printenv
         run: printenv
 
-      # - run: export ACTIONS_CACHE_URL=https://6228-212-154-66-44.ngrok-free.app
+      - name: generate random file
+        run: |
+          touch test1.txt
+          dd if=/dev/urandom of=test1.txt bs=1MB count=100
+          du -sh test1.txt
 
-      - name: echo $ACTIONS_CACHE_URL
-        run: echo $ACTIONS_CACHE_URL
+      - name: Ubicloud Cache
+        uses: enescakir/cache@ubicloud-cache
+        with:
+          path: test1.txt
+          key: 100MB-cache
 
-      - name: echo $ACTIONS_RUNTIME_TOKEN
-        run: echo $ACTIONS_RUNTIME_TOKEN
-
-      - name: Cache
-        id: cache
+      - name: Actions Cache
         uses: actions/cache@v4
         with:
-          path: demo
-          key: cache-2
-
-      - name: echo $ACTIONS_CACHE_URL
-        run: echo $ACTIONS_CACHE_URL
-
-      - name: echo $ACTIONS_RUNTIME_TOKEN
-        run: echo $ACTIONS_RUNTIME_TOKEN
-
-      - name: echo $PATH
-        run: echo $PATH
+          path: test1.txt
+          key: 100MB-cache
 
       # - name: cat /home/runner/actions-runner/.env
       #   continue-on-error: true
