@@ -49,13 +49,13 @@ jobs:
         uses: enescakir/cache@ubicloud-cache
         with:
           path: 1GB.bin
-          key: 1GB-cache
+          key: 1GB-cache-2
 
       - name: Actions Cache
         uses: actions/cache@v4
         with:
           path: 1GB.bin
-          key: 1GB-cache
+          key: 1GB-cache-2
 
       - name: download-test file
         if: steps.cache.outputs.cache-hit != 'true'
@@ -63,9 +63,7 @@ jobs:
           wget http://hel.icmp.hetzner.com/1GB.bin
 
       - name: check file
-        run: |
-          ls -lah
-          du -sh 1GB.bin
+        run: du -sh 1GB.bin
 
       # - name: cat /home/runner/actions-runner/.env
       #   continue-on-error: true
