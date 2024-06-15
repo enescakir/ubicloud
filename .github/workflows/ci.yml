@@ -3,14 +3,14 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - ruby-cache
   pull_request:
 
 jobs:
   ruby-ci:
     strategy:
       matrix:
-        runs-on: [ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2004]
+        runs-on: [ubicloud]
     continue-on-error: true
     name: Ruby CI - ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -60,7 +60,7 @@ jobs:
         rm -rf ruby-build
 
     - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
+      uses: ubicloud/setup-ruby@v1
       with:
         ruby-version: .tool-versions
         bundler-cache: true
