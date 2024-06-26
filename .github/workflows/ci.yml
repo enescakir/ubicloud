@@ -3,14 +3,14 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - test-ruby-cache
   pull_request:
 
 jobs:
   ruby-ci:
     strategy:
       matrix:
-        runs-on: [ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2004]
+        runs-on: [ubicloud, ubicloud, ubicloud-arm, ubicloud-arm]
     continue-on-error: true
     name: Ruby CI - ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -40,12 +40,14 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4
 
+    - run: printenv
+
     - name: Cache ruby for ARM runners
       id: cache-ruby
       if: matrix.runs-on == 'ubicloud-arm'
-      uses: actions/cache@v4
+      uses: ubicloud/cache@ubicloud-init
       with:
-        path: /opt/hostedtoolcache/Ruby
+        path: ${{ env.RUNNER_TOOL_CACHE }}/Ruby
         key: ${{ matrix.runs-on }}-ruby-${{ hashFiles('.tool-versions') }}
 
     - name: Install ruby for ARM runners if not cached
@@ -54,13 +56,13 @@ jobs:
         git clone https://github.com/rbenv/ruby-build.git
         sudo ./ruby-build/install.sh
         RUBY_VERSION="$(grep -E '^ruby ' .tool-versions | cut -d' ' -f2)"
-        sudo ruby-build "$RUBY_VERSION" /opt/hostedtoolcache/Ruby/$RUBY_VERSION/arm64
-        sudo chown -R runner:runner /opt/hostedtoolcache/Ruby
-        touch /opt/hostedtoolcache/Ruby/$RUBY_VERSION/arm64.complete
+        sudo ruby-build "$RUBY_VERSION" $RUNNER_TOOL_CACHE/Ruby/$RUBY_VERSION/arm64
+        sudo chown -R runner:runner $RUNNER_TOOL_CACHE/Ruby
+        touch $RUNNER_TOOL_CACHE/Ruby/$RUBY_VERSION/arm64.complete
         rm -rf ruby-build
 
     - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
+      uses: ubicloud/setup-ruby@ubicloud-init
       with:
         ruby-version: .tool-versions
         bundler-cache: true
