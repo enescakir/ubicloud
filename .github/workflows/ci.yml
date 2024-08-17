@@ -44,6 +44,10 @@ jobs:
         continue-on-error: true
         run: cat /home/runner/actions-runner/.env
 
+      - name: cat /home/runner/actions-runner/run-withenv.sh
+        continue-on-error: true
+        run: cat /home/runner/actions-runner/run-withenv.sh
+
       - name: cat /etc/apt/apt-mirrors.txt
         continue-on-error: true
         run: cat /etc/apt/apt-mirrors.txt
@@ -97,19 +101,19 @@ jobs:
       - name: sudo apt list --installed | grep libpq
         run: sudo apt list --installed | grep libpq
 
-      - name: cargo
-        run: |
-          git clone https://github.com/sharkdp/fd
+      # - name: cargo
+      #   run: |
+      #     git clone https://github.com/sharkdp/fd
 
-          # Build
-          cd fd
-          cargo build
+      #     # Build
+      #     cd fd
+      #     cargo build
 
-          # Run unit tests and integration tests
-          cargo test
+      #     # Run unit tests and integration tests
+      #     cargo test
 
-          # Install
-          cargo install --path .
+      #     # Install
+      #     cargo install --path .
 
       - name: ls -lah
         run: ls -lah
