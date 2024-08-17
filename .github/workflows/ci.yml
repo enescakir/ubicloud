@@ -12,9 +12,9 @@ jobs:
       matrix:
         # runs-on: [ubicloud, ubuntu-latest, namespace-profile-default, buildjet-2vcpu-ubuntu-2204]
         # runs-on: [ubuntu-20.04, ubuntu-22.04, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2204]
-        runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2204]
+        # runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2204]
         # runs-on: [ubuntu-latest, ubicloud-standard-2-ubuntu-2004, ubicloud-standard-2-ubuntu-2204, ubicloud-standard-2-ubuntu-2404]
-        # runs-on: [ ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204]
+        runs-on: [ ubicloud-standard-2-arm-ubuntu-2004, ubicloud-standard-2-arm-ubuntu-2204]
         # runs-on: [ubuntu-22.04, ubicloud-standard-2, ubicloud-standard-4, ubicloud-standard-8, ubicloud-standard-16]
     name: ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
@@ -40,23 +40,18 @@ jobs:
       - name: echo $PATH
         run: echo $PATH
 
-      - name: cat /home/runner/actions-runner/.env
-        continue-on-error: true
-        run: cat /home/runner/actions-runner/.env
-
-      - name: cat /etc/apt/apt-mirrors.txt
-        continue-on-error: true
-        run: cat /etc/apt/apt-mirrors.txt
-
-      - name: sudo apt-get update
+      - name: Try to update apt-get
         run: sudo apt-get update
+
+      - name: Check filesystem
+        run: sudo fsck -nf || [ $? -eq 4 ]
+
+      - name: Check docker internet connectivity
+        continue-on-error: true
+        run: docker run alpine ping -c 2 google.com
 
       - name: sudo apt-get install wireshark
         run: sudo apt-get install wireshark
-
-      - name: sudo fsck -nf
-        continue-on-error: true
-        run: sudo fsck -nf
 
       - uses: actions/setup-python@v2
         with:
@@ -80,6 +75,7 @@ jobs:
         run: sudo npm i -g npm
 
       - uses: ruby/setup-ruby@v1
+        continue-on-error: true
         with:
           ruby-version: '3.2.5'
 
@@ -97,19 +93,19 @@ jobs:
       - name: sudo apt list --installed | grep libpq
         run: sudo apt list --installed | grep libpq
 
-      - name: cargo
-        run: |
-          git clone https://github.com/sharkdp/fd
+      # - name: cargo
+      #   run: |
+      #     git clone https://github.com/sharkdp/fd
 
-          # Build
-          cd fd
-          cargo build
+      #     # Build
+      #     cd fd
+      #     cargo build
 
-          # Run unit tests and integration tests
-          cargo test
+      #     # Run unit tests and integration tests
+      #     cargo test
 
-          # Install
-          cargo install --path .
+      #     # Install
+      #     cargo install --path .
 
       - name: ls -lah
         run: ls -lah
