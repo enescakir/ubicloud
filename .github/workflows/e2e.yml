@@ -15,18 +15,23 @@ on:
   schedule:
     - cron:  '0 */2 * * *'
 
-  issue_comment:
-    types: [created]
-
 jobs:
-  run-debug:
-    if: github.event.issue.pull_request
+  debug-cases:
     runs-on: ubuntu-latest
     steps:
-    - run: echo "${{ github.event.comment.body }}"
-    - run: echo "${{ toJson(github.event.comment) }}"
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Add e2e script to Procfile
+        run: |
+          test_cases="$(yq -r '[.[].name] | join(",")' config/e2e_test_cases.yml)"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.test_cases }}" ]]; then
+            test_cases="${{ inputs.test_cases }}"
+          fi
+          echo "Running e2e test cases: $test_cases"
+
   run-ci:
-    if: vars.RUN_E2E == 'true' || (github.event.issue.pull_request && github.event.comment.body == '/run-e2e')
+    if: vars.RUN_E2E == 'true' && false
     runs-on: ubicloud
     environment: E2E-CI
     # TODO: Revert it when the internal MinIO cluster is stabilized
