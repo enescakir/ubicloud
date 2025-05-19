@@ -19,6 +19,12 @@ on:
     types: [created]
 
 jobs:
+  run-debug:
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo "{{ github.event.issue.body }}"
+    - run: echo "{{ github.event.issue }}"
   run-ci:
     if: vars.RUN_E2E == 'true' || (github.event.issue.pull_request && github.event.issue.body == '/run-e2e')
     runs-on: ubicloud
