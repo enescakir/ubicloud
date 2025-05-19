@@ -15,9 +15,18 @@ on:
   schedule:
     - cron:  '0 */2 * * *'
 
+  issue_comment:
+    types: [created]
+
 jobs:
+  run-debug:
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo "${{ github.event.comment.body }}"
+    - run: echo "${{ toJson(github.event.comment) }}"
   run-ci:
-    if: vars.RUN_E2E == 'true'
+    if: vars.RUN_E2E == 'true' || (github.event.issue.pull_request && github.event.comment.body == '/run-e2e')
     runs-on: ubicloud
     environment: E2E-CI
     # TODO: Revert it when the internal MinIO cluster is stabilized
