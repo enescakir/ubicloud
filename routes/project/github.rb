@@ -54,6 +54,27 @@ class Clover
           r.redirect "#{@project.path}/github/#{@installation.ubid}/setting"
         end
 
+        r.get "usage" do
+          # Fetching usage by runner family for the last 30 days.
+          # We can add more options in the future.
+          end_time = Time.now.to_date.to_time + 24 * 60 * 60
+          begin_time = end_time - 30 * 24 * 60 * 60
+          billing_rate_id = BillingRate.from_resource_type("GitHubRunnerMinutes").map { it["id"] }
+
+          BillingRecord
+            .where(project_id: GithubInstallation[name: "enescakir"].project_id, billing_rate_id: )
+            .where { Sequel.pg_range(span).overlaps(Sequel.pg_range(begin_time...end_time)) }
+            .select(Sequel.lit("date_trunc('day', lower(span)) as date"), :billing_rate_id, :amount)
+            .order(:date)
+            .all
+            .group_by { |it| it[:billing_rate_id] }
+            .map do |billing_rate_id, records|
+              billing_rate = BillingRate.from_id(billing_rate_id)
+              [billing_rate["resource_family"], records.map { |it| [it[:date].to_date.to_time.to_i, (it[:amount] * billing_rate["unit_price"]).to_f.round(4)] }]
+            end
+            .to_h
+        end
+
         r.on "runner" do
           r.get true do
             @runners = @installation.runners_dataset.eager(:vm).eager_graph(:strand)

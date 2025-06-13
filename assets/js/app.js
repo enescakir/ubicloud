@@ -5,6 +5,7 @@ $(function () {
   setupPlayground();
   setupFormsWithPatchMethod();
   setupMetricsCharts();
+  setupUsageChart();
 });
 
 $(".toggle-mobile-menu").on("click", function (event) {
@@ -968,4 +969,137 @@ function flexiblePrecision(value, precision) {
   const increasedPrecision = Math.max(1, precision);
 
   return (value < 10) ? value.toFixed(increasedPrecision) : value.toFixed(precision);
+}
+
+function setupUsageChart() {
+  const container = document.querySelector('#usage-chart');
+  if (!container) {
+    return;
+  }
+
+  console.log(container);
+  const chart = echarts.init(container)
+
+  const options = {
+    color: colorPalette.map(p => p.color),
+    tooltip: {
+      trigger: 'axis',
+      formatter: function (params) {
+        // Build the tooltip HTML
+        let html = `<strong>${new Date(params[0].value[0]).toLocaleString('en-US', {day: 'numeric', month: 'short', year: 'numeric'})}</strong><br/>`;
+        params.forEach((item) => {
+          const value = `$${item.value[1]}`;
+          // Use the series color for the marker
+          const colorClass = colorPalette[item.componentIndex % colorPalette.length].class;
+          html += `
+            <div class="text-${colorClass} text-left">● ${item.seriesName}</div><div class="text-right font-semibold">${value}<br/></div>
+          `;
+        });
+        return `<div class="grid grid-cols-2">${html}</div>`;
+      }
+    },
+    xAxis: {
+      type: 'time',
+      splitNumber: 30, // approximate number of ticks — 30 for daily over a month
+      axisLabel: {
+        rotate: 60, // rotate labels 45 degrees
+        formatter: (value) => new Date(value).toLocaleString('en-US', {month: 'short', day: 'numeric'})
+      },
+      // splitLine: { show: true },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        formatter: (value) => `$${value}`
+      },
+    },
+    grid: {
+      containLabel: true,
+      left: '0%',
+      right: '2%',
+      top: '10%',
+      bottom: '0%',
+    },
+  }
+
+  chart.setOption(options);
+
+  window.addEventListener('resize', debounce(chart.resize, 300));
+
+  chart.showLoading();
+
+  // update query
+  fetch("/project/pjpwd96mtkj26qzcffbx7s81nk/github/g1fbrmxq2h6e1gvn12q3bpqd97/usage")
+    .then(response => response.json())
+    .then(data => {
+      const usage = data || [];
+      if (usage.length === 0) {
+        console.warn("No usage found");
+        return;
+      }
+
+      const end_time = new Date().setHours(0, 0, 0, 0);
+      const start_time = end_time - 30 * 24 * 60 * 60 * 1000;
+
+      const oneDay = 24 * 60 * 60 * 1000;
+      const filledTimestamps = [];
+      for (let ts = start_time; ts <= end_time; ts += oneDay) { filledTimestamps.push(ts) }
+      console.log(filledTimestamps);
+      const chartSeries = [];
+      for (const [seriesName, values] of Object.entries(usage)) {
+        console.log(seriesName);
+        const valueMap = new Map(values.map(item => [item[0] * 1000, item[1]]));
+        const seriesData = filledTimestamps.map(ts => [ts, valueMap.get(ts) || 0]);
+
+        console.log(values);
+        console.log(seriesData);
+
+        chartSeries.push({
+          name: seriesName,
+          type: 'bar',
+          stack: 'Total',
+          areaStyle: {},
+          emphasis: {
+            focus: 'series'
+          },
+          data: seriesData,
+        });
+      }
+
+      chart.hideLoading();
+      chart.setOption({
+        legend: {
+          data: chartSeries.map(series => series.name),
+          right: '2%',
+        },
+        xAxis: {
+          min: start_time,
+          max: end_time
+        },
+        series: chartSeries
+      });
+      chart.resize();
+    })
+    .catch(error => {
+      chart.hideLoading();
+      chart.setOption({
+        graphic: {
+          type: 'text',
+          left: 'center',
+          top: 'middle',
+          style: {
+            text: 'Failed to load data. Please refresh the charts to try again.',
+            fontSize: 18,
+            fill: '#c00'
+          }
+        }
+      });
+
+      console.error(`Error fetching data: ${error}`)
+    });
+
+
+  // updateMetricsCharts();
+  // // Reload charts every 5 minutes.
+  // setInterval(updateMetricsCharts, 5 * 60 * 1000);
 }

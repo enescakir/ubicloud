@@ -1,10 +1,18 @@
 <% @page_title = "Active Runners" %>
 
-<div class="auto-refresh hidden" data-interval="10"></div>
+<!-- <div class="auto-refresh hidden" data-interval="10"></div> -->
+
+<% @enable_echarts = true %>
 
 <%== render("github/tabbar") %>
 
 <div class="grid gap-6">
+  <div class="relative p-4 bg-gray-50 rounded-lg border border-gray-100">
+    <h4 class="text-sm font-medium text-gray-900 mb-2">Runner Usage</h4>
+    <div class="h-64 w-full" id="usage-chart">
+    </div>
+  </div>
+
   <%== part(
     "components/table_card",
     headers: ["Repository", "Runner", "Workflow Job", "", ""],
