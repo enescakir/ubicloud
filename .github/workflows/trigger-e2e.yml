@@ -75,11 +75,11 @@ jobs:
               console.log('Workflow dispatch response:', dispatch);
 
               // Append the workflow run URL to the original comment
-              if (dispatch.data?.workflow_url) {
+              if (dispatch.data?.html_url) {
                 await github.rest.issues.updateComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   comment_id: context.payload.comment.id,
-                  body: `${context.payload.comment.body}\n\nE2E tests triggered: ${dispatch.data.workflow_url}`
+                  body: `${context.payload.comment.body}\n\nE2E tests triggered: ${dispatch.data.html_url}`
                 });
               }
