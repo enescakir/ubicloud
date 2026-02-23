@@ -71,6 +71,9 @@ jobs:
                 return_run_details: true
               });
 
+              // print response
+              console.log('Workflow dispatch response:', dispatch);
+
               // Append the workflow run URL to the original comment
               if (dispatch.data?.workflow_url) {
                 await github.rest.issues.updateComment({
