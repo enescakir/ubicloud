@@ -314,6 +314,11 @@ jobs:
         fi
         echo "Found instances in logs: $log_instance_ids"
 
+        timeline_ubids=$(grep -oh '"thread":"pt[^"]*"' foreman.log 2>/dev/null | cut -d'"' -f4 | sort -u || true)
+        echo "Found postgres timeline UBIDs: $timeline_ubids"
+
+        all_instance_profile_names=""
+
         for region in eu-central-1 us-west-2; do
           echo "Cleaning up resources in $region"
 
@@ -335,9 +340,13 @@ jobs:
             --query "Addresses[].AllocationId" --output text | sort -u || true)
           vpc_ids=$(aws ec2 describe-instances --instance-ids $instance_ids --region $region \
             --query "Reservations[].Instances[].VpcId" --output text | sort -u || true)
+          ip_names=$(aws ec2 describe-instances --instance-ids $instance_ids --region $region \
+            --query "Reservations[].Instances[].IamInstanceProfile.Arn" --output text | tr '\t' '\n' | sed 's|.*/||' | sort -u || true)
           echo "Found ENIs: $eni_ids"
           echo "Found EIPs: $eip_ids"
           echo "Found VPCs: $vpc_ids"
+          echo "Found IAM Instance Profiles: $ip_names"
+          all_instance_profile_names="$all_instance_profile_names $ip_names"
 
           echo "Terminating instances: $instance_ids"
           aws ec2 terminate-instances --instance-ids $instance_ids --region $region || true
@@ -371,4 +380,53 @@ jobs:
             wait
             aws ec2 delete-vpc --vpc-id $vpc_id --region $region || true
           done
+        done
+
+        # Clean up IAM resources (IAM is global, not region-specific)
+        for ip_name in $(echo "$all_instance_profile_names" | tr ' ' '\n' | sort -u); do
+          [ -z "$ip_name" ] && continue
+          role_name="${ip_name%-instance-profile}"
+          echo "Cleaning up IAM resources for role: $role_name"
+
+          aws iam remove-role-from-instance-profile --instance-profile-name "$ip_name" --role-name "$role_name" || true
+          aws iam delete-instance-profile --instance-profile-name "$ip_name" || true
+
+          policy_arns=$(aws iam list-attached-role-policies --role-name "$role_name" --query "AttachedPolicies[].PolicyArn" --output text || true)
+          for policy_arn in $policy_arns; do
+            echo "Detaching and deleting policy: $policy_arn"
+            aws iam detach-role-policy --role-name "$role_name" --policy-arn "$policy_arn" || true
+            aws iam delete-policy --policy-arn "$policy_arn" || true
+          done
+
+          aws iam delete-role --role-name "$role_name" || true
+        done
+
+        # Clean up postgres timeline resources (bucket name = IAM user name = policy name = timeline UBID)
+        for ubid in $timeline_ubids; do
+          [ -z "$ubid" ] && continue
+          echo "Deleting S3 bucket: $ubid"
+          aws s3 rm "s3://$ubid" --recursive --region us-west-2 || true
+          aws s3api delete-bucket --bucket "$ubid" --region us-west-2 || true
+        done
+
+        account_id=$(aws sts get-caller-identity --query Account --output text || true)
+        for ubid in $timeline_ubids; do
+          [ -z "$ubid" ] && continue
+          echo "Cleaning up postgres timeline IAM: $ubid"
+
+          # Clean up IAM policy (when using IAM role access, no user is created, only a policy)
+          if [ -n "$account_id" ]; then
+            policy_arn="arn:aws:iam::${account_id}:policy/${ubid}"
+            aws iam delete-policy --policy-arn "$policy_arn" || true
+          fi
+
+          # Clean up IAM user and its attached resources
+          for policy_arn in $(aws iam list-attached-user-policies --user-name "$ubid" --query "AttachedPolicies[].PolicyArn" --output text || true); do
+            aws iam detach-user-policy --user-name "$ubid" --policy-arn "$policy_arn" || true
+            aws iam delete-policy --policy-arn "$policy_arn" || true
+          done
+          for key_id in $(aws iam list-access-keys --user-name "$ubid" --query "AccessKeyMetadata[].AccessKeyId" --output text || true); do
+            aws iam delete-access-key --user-name "$ubid" --access-key-id "$key_id" || true
+          done
+          aws iam delete-user --user-name "$ubid" || true
         done
