@@ -199,12 +199,22 @@ def generate_pdf(params)
   pdf.move_down row.height.to_i - 20
 
   # Row 3: Items table
-  table_items = [["RESOURCE", "DESCRIPTION", "USAGE", "AMOUNT"]]
+  has_usage = items.any? { |item| !item[:usage].empty? }
+  if has_usage
+    table_items = [["RESOURCE", "DESCRIPTION", "USAGE", "AMOUNT"]]
+    colspan = 4
+  else
+    table_items = [["RESOURCE", "DESCRIPTION", "AMOUNT"]]
+    colspan = 3
+  end
   if items.empty?
-    table_items << [{content: "No resources", colspan: 4, align: :center, font_style: :semibold}]
+    table_items << [{content: "No resources", colspan: colspan, align: :center, font_style: :semibold}]
   else
     items.each do |item|
-      table_items << [item[:name], item[:description], item[:usage], format_money(item[:amount], currency)]
+      row_data = [item[:name], item[:description]]
+      row_data << item[:usage] if has_usage
+      row_data << format_money(item[:amount], currency)
+      table_items << row_data
     end
   end
   pdf.table table_items, header: true, width: pdf.bounds.width, cell_style: {size: 9, border_color: "E5E7EB", borders: [], padding: [5, 6, 12, 6], valign: :center} do
