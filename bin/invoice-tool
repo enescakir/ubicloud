@@ -321,7 +321,7 @@ HTML_TEMPLATE = <<~'HTML'
       </div>
       <div>
         <label>Invoice Number</label>
-        <input type="text" name="invoice_number" value="%{default_invoice_number}">
+        <input type="text" name="invoice_number" value="DEFAULT_INVOICE_NUMBER">
       </div>
     </div>
     <div class="row">
@@ -457,7 +457,7 @@ server = WEBrick::HTTPServer.new(Port: port, Logger: WEBrick::Log.new($stdout, W
 server.mount_proc "/" do |req, res|
   if req.request_method == "GET"
     res.content_type = "text/html"
-    res.body = HTML_TEMPLATE % {default_invoice_number: default_invoice_number}
+    res.body = HTML_TEMPLATE.sub("DEFAULT_INVOICE_NUMBER", default_invoice_number)
   else
     res.status = 405
   end
