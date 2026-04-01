@@ -11,6 +11,7 @@ require "prawn/table"
 require "json"
 require "date"
 require "cgi"
+require "securerandom"
 
 ASSETS_DIR = File.expand_path("../../assets", __FILE__)
 PUBLIC_DIR = File.expand_path("../../public", __FILE__)
@@ -264,7 +265,14 @@ def generate_pdf(params)
   pdf.render
 end
 
-HTML_FORM = <<~'HTML'
+def default_invoice_number
+  invoice_month = Time.now.strftime("%y%m")
+  invoice_customer = SecureRandom.uuid.delete("-")[-10..]
+  invoice_order = format("%04d", 1)
+  "#{invoice_month}-#{invoice_customer}-#{invoice_order}"
+end
+
+HTML_TEMPLATE = <<~'HTML'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -313,7 +321,7 @@ HTML_FORM = <<~'HTML'
       </div>
       <div>
         <label>Invoice Number</label>
-        <input type="text" name="invoice_number" placeholder="2503-001">
+        <input type="text" name="invoice_number" value="%{default_invoice_number}">
       </div>
     </div>
     <div class="row">
@@ -449,7 +457,7 @@ server = WEBrick::HTTPServer.new(Port: port, Logger: WEBrick::Log.new($stdout, W
 server.mount_proc "/" do |req, res|
   if req.request_method == "GET"
     res.content_type = "text/html"
-    res.body = HTML_FORM
+    res.body = HTML_TEMPLATE % {default_invoice_number: default_invoice_number}
   else
     res.status = 405
   end
