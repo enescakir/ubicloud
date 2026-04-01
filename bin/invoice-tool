@@ -185,8 +185,8 @@ def generate_pdf(params)
     right_data = []
     creation_date = params["creation_date"].to_s.strip
     due_date = params["due_date"].to_s.strip
-    right_data << ["Invoice date:", creation_date] unless creation_date.empty?
-    right_data << ["Due date:", due_date] unless due_date.empty?
+    right_data << ["Invoice date:", Date.parse(creation_date).strftime("%B %d, %Y")] unless creation_date.empty?
+    right_data << ["Due date:", Date.parse(due_date).strftime("%B %d, %Y")] unless due_date.empty?
     right_data << ["Note:", note] unless note.empty?
     unless right_data.empty?
       pdf.table(right_data, position: :right) do
