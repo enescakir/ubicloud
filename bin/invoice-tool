@@ -1,0 +1,457 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Standalone invoice PDF generator tool.
+# Usage: ruby bin/invoice-tool
+# Then open http://localhost:9872 in your browser.
+
+require "webrick"
+require "prawn"
+require "prawn/table"
+require "json"
+require "date"
+require "cgi"
+
+ASSETS_DIR = File.expand_path("../../assets", __FILE__)
+PUBLIC_DIR = File.expand_path("../../public", __FILE__)
+
+ISSUERS = {
+  "bv" => {
+    name: "Ubicloud B.V.",
+    address: "Turfschip 267",
+    country: "Netherlands",
+    city: "Amstelveen",
+    postal_code: "1186 XK",
+    tax_id: "NL864651442B01",
+    trade_id: "88492729"
+  },
+  "inc" => {
+    name: "Ubicloud Inc.",
+    address: "310 Santa Ana Avenue",
+    country: "United States",
+    city: "San Francisco",
+    state: "CA",
+    postal_code: "94127"
+  }
+}
+
+BANK_TRANSFER_INFO = {
+  "bv" => {
+    "Beneficiary" => "Ubicloud B.V.",
+    "IBAN" => "NL30REVO6759811127",
+    "BIC" => "REVONL22",
+    "Intermediary BIC" => "CHASGB2L",
+    "Beneficiary address" => "Turfschip, 267, 1186XK, Amstelveen, Netherlands",
+    "Bank/Payment institution" => "Revolut Bank UAB",
+    "Bank address" => "Barbara Strozzilaan 201, 1083 HN, Amsterdam, Netherlands"
+  },
+  "inc" => {
+    "Beneficiary" => "Ubicloud Inc.",
+    "Beneficiary address" => "310 Santa Ana Ave, San Francisco, CA 94127",
+    "ABA/Routing number" => "121145349",
+    "Account number" => "974842159957503",
+    "Bank/Payment institution" => "Column NA - Brex",
+    "Bank address" => "1 Letterman Drive Building A, Suite A4-700, San Francisco, CA 94129"
+  }
+}
+
+def parse_form(body)
+  params = {}
+  body.split("&").each do |pair|
+    key, value = pair.split("=", 2)
+    params[CGI.unescape(key)] = CGI.unescape(value || "")
+  end
+  params
+end
+
+def parse_items(params)
+  items = []
+  i = 0
+  loop do
+    name = params["item_name_#{i}"]
+    break unless name && !name.empty?
+    items << {
+      name: name,
+      description: params["item_description_#{i}"] || "",
+      usage: params["item_usage_#{i}"] || "",
+      amount: params["item_amount_#{i}"].to_f
+    }
+    i += 1
+  end
+  items
+end
+
+def currency_symbol(currency)
+  currency == "EUR" ? "\u20AC" : "$"
+end
+
+def format_money(amount, currency)
+  "#{currency_symbol(currency)}#{"%.2f" % amount}"
+end
+
+def generate_pdf(params)
+  issuer_key = params["issuer"] || "inc"
+  issuer = ISSUERS[issuer_key]
+  currency = params["currency"] || "USD"
+  items = parse_items(params)
+  include_bank = params["bank_transfer"] == "on"
+  tax_label = (params["tax_label"] || "").strip
+  tax_label = "VAT" if tax_label.empty?
+  tax_ratio_str = (params["tax_ratio"] || "").strip
+  tax_text = (params["tax_text"] || "").strip
+  invoice_number = (params["invoice_number"] || "").strip
+  note = (params["note"] || "").strip
+
+  subtotal = items.sum { |it| it[:amount] }
+  tax_amount = 0.0
+  tax_display = nil
+
+  if !tax_text.empty?
+    tax_display = "#{tax_label}: #{tax_text}"
+  elsif !tax_ratio_str.empty?
+    tax_ratio = tax_ratio_str.to_f
+    tax_amount = (subtotal * tax_ratio / 100.0).round(2)
+    tax_display = "#{tax_label} (#{tax_ratio}%)"
+  end
+
+  total = subtotal + tax_amount
+
+  pdf = Prawn::Document.new(
+    page_size: "A4",
+    page_layout: :portrait,
+    info: {Title: "Invoice", Creator: "Ubicloud", CreationDate: Time.now}
+  )
+
+  pdf.font_families.update(
+    "BeVietnamPro" => {
+      normal: File.join(ASSETS_DIR, "font/BeVietnamPro/Regular.ttf"),
+      semibold: File.join(ASSETS_DIR, "font/BeVietnamPro/SemiBold.ttf")
+    }
+  )
+  pdf.font "BeVietnamPro"
+
+  column_width = (pdf.bounds.width / 2) - 10
+  right_column_x = column_width + 20
+  dark_gray = "1F2937"
+  light_gray = "6B7280"
+
+  pdf.fill_color light_gray
+
+  # Row 1, Left: Logo + issuer
+  row_y = pdf.bounds.top
+  row = pdf.bounding_box([0, row_y], width: column_width) do
+    logo_path = File.join(PUBLIC_DIR, "logo-primary.png")
+    pdf.image logo_path, height: 25, position: :left
+    pdf.move_down 10
+    pdf.text issuer[:name], style: :semibold, color: dark_gray
+    pdf.text "#{issuer[:address]},"
+    location_parts = [issuer[:city], issuer[:state], issuer[:postal_code]].compact.reject(&:empty?)
+    pdf.text "#{location_parts.join(", ")},"
+    pdf.text issuer[:country]
+    pdf.text "Tax ID: #{issuer[:tax_id]}" if issuer[:tax_id]
+    pdf.text "CCI/KVK ID: #{issuer[:trade_id]}" if issuer[:trade_id]
+  end
+
+  # Row 1, Right: Invoice title
+  invoice_title = params["invoice_title"].to_s.strip
+  invoice_title = "Invoice" if invoice_title.empty?
+  pdf.bounding_box([right_column_x, row_y], width: column_width) do
+    pdf.text invoice_title, align: :right, style: :semibold, color: dark_gray, size: 18
+    pdf.text "##{invoice_number}", align: :right unless invoice_number.empty?
+  end
+  pdf.move_down row.height.to_i - 20
+
+  # Row 2, Left: Customer info
+  row_y = pdf.cursor
+  customer_name = params["customer_name"].to_s.strip
+  customer_address = params["customer_address"].to_s.strip
+  customer_tax_id = params["customer_tax_id"].to_s.strip
+  row = pdf.bounding_box([0, row_y], width: column_width) do
+    unless customer_name.empty?
+      pdf.text "Bill to:", style: :semibold, color: dark_gray, size: 14
+      pdf.text customer_name, style: :semibold, color: dark_gray, size: 14
+      pdf.move_down 5
+      customer_address.split("\n").each { |line| pdf.text line.strip }
+      pdf.text "#{tax_label} ID: #{customer_tax_id}" unless customer_tax_id.empty?
+    end
+  end
+
+  # Row 2, Right: Dates
+  pdf.bounding_box([right_column_x, row_y], width: column_width) do
+    right_data = []
+    creation_date = params["creation_date"].to_s.strip
+    due_date = params["due_date"].to_s.strip
+    right_data << ["Invoice date:", creation_date] unless creation_date.empty?
+    right_data << ["Due date:", due_date] unless due_date.empty?
+    right_data << ["Note:", note] unless note.empty?
+    unless right_data.empty?
+      pdf.table(right_data, position: :right) do
+        style(row(0..2).columns(0..2), padding: [2, 5, 2, 5], borders: [])
+        style(column(0), align: :right, width: 90, text_wrap: :right, font_style: :semibold, text_color: dark_gray)
+        style(column(1), align: :right)
+      end
+    end
+  end
+  pdf.move_down row.height.to_i - 20
+
+  # Row 3: Items table
+  table_items = [["RESOURCE", "DESCRIPTION", "USAGE", "AMOUNT"]]
+  if items.empty?
+    table_items << [{content: "No resources", colspan: 4, align: :center, font_style: :semibold}]
+  else
+    items.each do |item|
+      table_items << [item[:name], item[:description], item[:usage], format_money(item[:amount], currency)]
+    end
+  end
+  pdf.table table_items, header: true, width: pdf.bounds.width, cell_style: {size: 9, border_color: "E5E7EB", borders: [], padding: [5, 6, 12, 6], valign: :center} do
+    style(row(0), size: 12, font_style: :semibold, text_color: dark_gray, background_color: "F9FAFB")
+    style(column(0), text_color: dark_gray)
+    style(columns(-2..-1), align: :right)
+    style(column(0), borders: [:left, :top, :bottom])
+    style(column(-1), borders: [:right, :top, :bottom], width: 70)
+    style(columns(1..-2), borders: [:top, :bottom])
+  end
+  pdf.move_down 10
+
+  # Row 4: Totals
+  totals = [["Subtotal:", format_money(subtotal, currency)]]
+  if tax_display && tax_amount > 0
+    totals << ["#{tax_display}:", format_money(tax_amount, currency)]
+  elsif tax_display && tax_amount == 0
+    totals << [tax_display, ""]
+  end
+  totals << ["Total:", format_money(total, currency)]
+  pdf.table(totals, position: :right, cell_style: {padding: [2, 5, 2, 5], borders: []}) do
+    style(column(0), align: :right, font_style: :semibold, text_color: dark_gray)
+    style(column(1), align: :right)
+  end
+
+  # Bank transfer info
+  if include_bank
+    bank_info = BANK_TRANSFER_INFO[issuer_key]
+    if bank_info
+      pdf.move_down 60
+      bank_rows = [
+        [{content: "We kindly request you to remit the amount to:", colspan: 2, font_style: :semibold}],
+        *bank_info.to_a
+      ]
+      pdf.table(bank_rows, position: :left) do
+        style(row(0..-1).columns(0..1), padding: [2, 5, 2, 5], borders: [])
+        style(column(0), align: :right, font_style: :semibold, text_color: dark_gray)
+        style(column(1), align: :left)
+        style(row(0), align: :left)
+      end
+    end
+  end
+
+  pdf.render
+end
+
+HTML_FORM = <<~'HTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ubicloud Invoice Generator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; color: #1f2937; padding: 2rem; }
+  .container { max-width: 720px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 2rem; }
+  h1 { font-size: 1.5rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 .75rem; border-bottom: 1px solid #e5e7eb; padding-bottom: .25rem; }
+  label { display: block; font-size: .875rem; font-weight: 500; margin-bottom: .25rem; color: #374151; }
+  input[type="text"], input[type="number"], input[type="date"], textarea, select {
+    width: 100%; padding: .5rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: .875rem; margin-bottom: .75rem;
+  }
+  textarea { resize: vertical; min-height: 60px; }
+  .row { display: flex; gap: 1rem; }
+  .row > * { flex: 1; }
+  .items-section { background: #f9fafb; border-radius: 6px; padding: 1rem; margin-bottom: .75rem; }
+  .item-row { display: flex; gap: .5rem; align-items: end; margin-bottom: .5rem; }
+  .item-row > * { flex: 1; }
+  .item-row .amount-col { max-width: 120px; }
+  .item-row .remove-col { max-width: 36px; flex: 0 0 36px; }
+  .item-row .remove-col button { width: 36px; height: 36px; border: none; background: #fee2e2; color: #dc2626; border-radius: 6px; cursor: pointer; font-size: 1.1rem; }
+  .btn { padding: .5rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-size: .875rem; font-weight: 500; }
+  .btn-primary { background: #2563eb; color: #fff; font-size: 1rem; padding: .75rem 2rem; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-secondary { background: #e5e7eb; color: #374151; }
+  .btn-secondary:hover { background: #d1d5db; }
+  .actions { margin-top: 1.5rem; display: flex; gap: .75rem; justify-content: flex-end; }
+  .checkbox-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; }
+  .checkbox-row input { width: auto; margin: 0; }
+  .checkbox-row label { margin: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Ubicloud Invoice Generator</h1>
+  <form method="post" action="/generate" target="_blank">
+    <h2>Invoice Details</h2>
+    <div class="row">
+      <div>
+        <label>Invoice Title</label>
+        <input type="text" name="invoice_title" value="Invoice" placeholder="Invoice for March 2025">
+      </div>
+      <div>
+        <label>Invoice Number</label>
+        <input type="text" name="invoice_number" placeholder="2503-001">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Creation Date</label>
+        <input type="date" name="creation_date">
+      </div>
+      <div>
+        <label>Due Date</label>
+        <input type="date" name="due_date">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Issuer</label>
+        <select name="issuer">
+          <option value="inc">Ubicloud Inc.</option>
+          <option value="bv">Ubicloud B.V.</option>
+        </select>
+      </div>
+      <div>
+        <label>Currency</label>
+        <select name="currency">
+          <option value="USD">USD ($)</option>
+          <option value="EUR">EUR (&euro;)</option>
+        </select>
+      </div>
+    </div>
+    <label>Note</label>
+    <input type="text" name="note" placeholder="Optional note">
+
+    <h2>Customer</h2>
+    <label>Name</label>
+    <input type="text" name="customer_name" placeholder="Acme Corp.">
+    <label>Address (multi-line)</label>
+    <textarea name="customer_address" placeholder="123 Main St,&#10;New York, NY 10001,&#10;United States"></textarea>
+    <label>Tax ID</label>
+    <input type="text" name="customer_tax_id" placeholder="Optional">
+
+    <h2>Line Items</h2>
+    <div class="items-section" id="items">
+      <div class="item-row">
+        <div><label>Resource</label><input type="text" name="item_name_0" placeholder="vm-1"></div>
+        <div><label>Description</label><input type="text" name="item_description_0" placeholder="standard-2"></div>
+        <div><label>Usage</label><input type="text" name="item_usage_0" placeholder="720 hours"></div>
+        <div class="amount-col"><label>Amount</label><input type="number" name="item_amount_0" step="0.01" placeholder="0.00"></div>
+        <div class="remove-col"><label>&nbsp;</label><button type="button" onclick="removeItem(this)">&times;</button></div>
+      </div>
+    </div>
+    <button type="button" class="btn btn-secondary" onclick="addItem()">+ Add Item</button>
+
+    <h2>Tax</h2>
+    <div class="row">
+      <div>
+        <label>Tax Label</label>
+        <input type="text" name="tax_label" value="VAT" placeholder="VAT">
+      </div>
+      <div>
+        <label>Tax Ratio (%)</label>
+        <input type="number" name="tax_ratio" step="0.01" placeholder="e.g. 21">
+      </div>
+      <div>
+        <label>Tax Text (overrides ratio)</label>
+        <input type="text" name="tax_text" placeholder="e.g. subject to reverse charge">
+      </div>
+    </div>
+
+    <h2>Options</h2>
+    <div class="checkbox-row">
+      <input type="checkbox" name="bank_transfer" id="bank_transfer">
+      <label for="bank_transfer">Include bank transfer information</label>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Generate PDF</button>
+    </div>
+  </form>
+</div>
+
+<script>
+let itemCount = 1;
+function addItem() {
+  const i = itemCount++;
+  const container = document.getElementById('items');
+  const row = document.createElement('div');
+  row.className = 'item-row';
+
+  const fields = [
+    {name: `item_name_${i}`, placeholder: 'resource', cls: ''},
+    {name: `item_description_${i}`, placeholder: 'description', cls: ''},
+    {name: `item_usage_${i}`, placeholder: 'usage', cls: ''},
+    {name: `item_amount_${i}`, placeholder: '0.00', cls: 'amount-col', type: 'number'}
+  ];
+
+  fields.forEach(f => {
+    const div = document.createElement('div');
+    if (f.cls) div.className = f.cls;
+    const input = document.createElement('input');
+    input.type = f.type || 'text';
+    input.name = f.name;
+    input.placeholder = f.placeholder;
+    if (f.type === 'number') input.step = '0.01';
+    div.appendChild(input);
+    row.appendChild(div);
+  });
+
+  const removeDiv = document.createElement('div');
+  removeDiv.className = 'remove-col';
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.textContent = '\u00D7';
+  removeBtn.addEventListener('click', function() { removeItem(this); });
+  removeDiv.appendChild(removeBtn);
+  row.appendChild(removeDiv);
+
+  container.appendChild(row);
+}
+function removeItem(btn) {
+  const row = btn.closest('.item-row');
+  if (document.querySelectorAll('.item-row').length > 1) {
+    row.remove();
+  }
+}
+</script>
+</body>
+</html>
+HTML
+
+port = Integer(ENV["PORT"] || 9872)
+
+server = WEBrick::HTTPServer.new(Port: port, Logger: WEBrick::Log.new($stdout, WEBrick::Log::INFO), AccessLog: [])
+
+server.mount_proc "/" do |req, res|
+  if req.request_method == "GET"
+    res.content_type = "text/html"
+    res.body = HTML_FORM
+  else
+    res.status = 405
+  end
+end
+
+server.mount_proc "/generate" do |req, res|
+  if req.request_method == "POST"
+    params = parse_form(req.body || "")
+    pdf_data = generate_pdf(params)
+    res.content_type = "application/pdf"
+    res["Content-Disposition"] = "inline; filename=\"invoice.pdf\""
+    res.body = pdf_data
+  else
+    res.status = 405
+  end
+end
+
+trap("INT") { server.shutdown }
+trap("TERM") { server.shutdown }
+
+puts "Invoice generator running at http://localhost:#{port}"
+server.start
