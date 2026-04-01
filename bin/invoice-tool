@@ -23,6 +23,7 @@ ISSUERS = {
     city: "Amstelveen",
     postal_code: "1186 XK",
     tax_id: "NL864651442B01",
+    tax_id_label: "VAT",
     trade_id: "88492729"
   },
   "inc" => {
@@ -152,7 +153,7 @@ def generate_pdf(params)
     location_parts = [issuer[:city], issuer[:state], issuer[:postal_code]].compact.reject(&:empty?)
     pdf.text "#{location_parts.join(", ")},"
     pdf.text issuer[:country]
-    pdf.text "Tax ID: #{issuer[:tax_id]}" if issuer[:tax_id]
+    pdf.text "#{issuer[:tax_id_label] || "Tax"} ID: #{issuer[:tax_id]}" if issuer[:tax_id]
     pdf.text "CCI/KVK ID: #{issuer[:trade_id]}" if issuer[:trade_id]
   end
 
