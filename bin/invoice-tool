@@ -460,7 +460,9 @@ server.mount_proc "/generate" do |req, res|
     params = parse_form(req.body || "")
     pdf_data = generate_pdf(params)
     res.content_type = "application/pdf"
-    res["Content-Disposition"] = "inline; filename=\"invoice.pdf\""
+    invoice_number = params["invoice_number"].to_s.strip
+    filename = invoice_number.empty? ? "invoice.pdf" : "#{invoice_number}.pdf"
+    res["Content-Disposition"] = "inline; filename=\"#{filename}\""
     res.body = pdf_data
   else
     res.status = 405
