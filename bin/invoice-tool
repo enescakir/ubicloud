@@ -220,6 +220,7 @@ def generate_pdf(params)
   pdf.table table_items, header: true, width: pdf.bounds.width, cell_style: {size: 9, border_color: "E5E7EB", borders: [], padding: [5, 6, 12, 6], valign: :center} do
     style(row(0), size: 12, font_style: :semibold, text_color: dark_gray, background_color: "F9FAFB")
     style(column(0), text_color: dark_gray)
+    style(column(1), align: :left)
     style(columns(-2..-1), align: :right)
     style(column(0), borders: [:left, :top, :bottom])
     style(column(-1), borders: [:right, :top, :bottom], width: 70)
