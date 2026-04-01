@@ -86,7 +86,9 @@ def currency_symbol(currency)
 end
 
 def format_money(amount, currency)
-  "#{currency_symbol(currency)}#{"%.2f" % amount}"
+  whole, decimal = ("%.2f" % amount).split(".")
+  whole_with_sep = whole.gsub(/(\d)(?=(\d{3})+(?!\d))/, '\1,')
+  "#{currency_symbol(currency)}#{whole_with_sep}.#{decimal}"
 end
 
 def generate_pdf(params)
@@ -105,9 +107,11 @@ def generate_pdf(params)
   subtotal = items.sum { |it| it[:amount] }
   tax_amount = 0.0
   tax_display = nil
+  tax_display_value = nil
 
   if !tax_text.empty?
-    tax_display = "#{tax_label}: #{tax_text}"
+    tax_display = "#{tax_label}:"
+    tax_display_value = tax_text
   elsif !tax_ratio_str.empty?
     tax_ratio = tax_ratio_str.to_f
     tax_amount = (subtotal * tax_ratio / 100.0).round(2)
@@ -217,8 +221,8 @@ def generate_pdf(params)
   totals = [["Subtotal:", format_money(subtotal, currency)]]
   if tax_display && tax_amount > 0
     totals << ["#{tax_display}:", format_money(tax_amount, currency)]
-  elsif tax_display && tax_amount == 0
-    totals << [tax_display, ""]
+  elsif tax_display && tax_display_value
+    totals << [tax_display, tax_display_value]
   end
   totals << ["Total:", format_money(total, currency)]
   pdf.table(totals, position: :right, cell_style: {padding: [2, 5, 2, 5], borders: []}) do
