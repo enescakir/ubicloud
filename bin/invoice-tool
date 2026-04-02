@@ -265,7 +265,7 @@ def generate_pdf(params)
   # PAID stamp
   if params["mark_paid"] == "on"
     pdf.move_down 40
-    pdf.text "PAID", align: :center, style: :semibold, size: 24, color: "16A34A"
+    pdf.text "PAID", align: :center, style: :semibold, size: 24, color: dark_gray
   end
 
   pdf.render
