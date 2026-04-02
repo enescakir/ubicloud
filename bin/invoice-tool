@@ -262,6 +262,12 @@ def generate_pdf(params)
     end
   end
 
+  # PAID stamp
+  if params["mark_paid"] == "on"
+    pdf.move_down 40
+    pdf.text "PAID", align: :center, style: :semibold, size: 24, color: "16A34A"
+  end
+
   pdf.render
 end
 
@@ -393,6 +399,10 @@ HTML_TEMPLATE = <<~'HTML'
     <div class="checkbox-row">
       <input type="checkbox" name="bank_transfer" id="bank_transfer">
       <label for="bank_transfer">Include bank transfer information</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" name="mark_paid" id="mark_paid">
+      <label for="mark_paid">Mark as PAID</label>
     </div>
 
     <div class="actions">
