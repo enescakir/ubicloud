@@ -36,7 +36,14 @@ class Prog::Github::GithubRepositoryNexus < Prog::Base
     end
     deadline = clock_time + 80
     client = github_repository.installation.client(auto_paginate: true)
-    queued_runs = client.repository_workflow_runs(github_repository.name, {status: "queued"})[:workflow_runs]
+    begin
+      queued_runs = client.repository_workflow_runs(github_repository.name, {status: "queued"})[:workflow_runs]
+    rescue Octokit::TooManyRequests
+      rate_limit = client.rate_limit
+      Clog.emit("rate limit exceeded", {rate_limit_exceeded: {repository_name: github_repository.name, remaining: rate_limit.remaining, limit: rate_limit.limit}})
+      @polling_interval = [(rate_limit.resets_at - Time.now).to_i, 30].max
+      return
+    end
     Clog.emit("polled queued runs", {polled_queued_runs: {repository_name: github_repository.name, count: queued_runs.count}})
 
     # We check the rate limit after the first API call to avoid unnecessary API

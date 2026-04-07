@@ -104,6 +104,20 @@ RSpec.describe Prog::Github::GithubRepositoryNexus do
       nx.check_queued_jobs
       expect(nx.polling_interval).to eq(24 * 60 * 60)
     end
+
+    it "sets polling interval to rate limit reset time when TooManyRequests is raised" do
+      expect(client).to receive(:repository_workflow_runs).and_raise(Octokit::TooManyRequests)
+      expect(client).to receive(:rate_limit).and_return(instance_double(Octokit::RateLimit, remaining: 0, limit: 100, resets_at: now + 10 * 60))
+      nx.check_queued_jobs
+      expect(nx.polling_interval).to eq(10 * 60)
+    end
+
+    it "sets polling interval to at least 30 seconds when TooManyRequests is raised" do
+      expect(client).to receive(:repository_workflow_runs).and_raise(Octokit::TooManyRequests)
+      expect(client).to receive(:rate_limit).and_return(instance_double(Octokit::RateLimit, remaining: 0, limit: 100, resets_at: now + 5))
+      nx.check_queued_jobs
+      expect(nx.polling_interval).to eq(30)
+    end
   end
 
   describe ".cleanup_cache" do
