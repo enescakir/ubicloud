@@ -12,7 +12,7 @@ updates:
     groups:
       aws-dependencies:
         patterns:
-          - "*aws*"
+          - "aws*"
       production-dependencies:
         dependency-type: "production"
       development-dependencies:
