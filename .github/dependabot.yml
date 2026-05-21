@@ -10,6 +10,9 @@ updates:
     allow:
       - dependency-type: "all"
     groups:
+      aws-dependencies:
+        patterns:
+          - "*aws*"
       production-dependencies:
         dependency-type: "production"
       development-dependencies:
