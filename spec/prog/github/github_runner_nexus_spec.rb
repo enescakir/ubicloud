@@ -113,7 +113,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     end
 
     it "uses alien vms by given ratio" do
-      GithubInstallationSpillOption.create(spill_ratio: 0.5, vcpus_limit: 300) { it.id = installation.id }
+      GithubInstallationSpillOption.create(spill_ratio: 0.5, x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
       expect(nx).to receive(:rand).and_return(0.4)
       location = Location.create(name: "eu-central-1", provider: "aws", project_id: vm.project_id, display_name: "aws-eu-central-1", ui_name: "AWS Frankfurt", visible: true)
       LocationCredentialAws.create(access_key: "test-access-key", secret_key: "test-secret-key") { it.id = location.id }
@@ -128,7 +128,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "does not use alien vms for large vcpu runners" do
       runner.update(label: "ubicloud-standard-30")
-      GithubInstallationSpillOption.create(spill_ratio: 1.0, vcpus_limit: 300) { it.id = installation.id }
+      GithubInstallationSpillOption.create(spill_ratio: 1.0, x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
       picked_vm = nx.pick_vm
       expect(picked_vm.family).to eq("standard")
       expect(picked_vm.location.aws?).to be(false)
@@ -396,7 +396,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
       it "waits if utilization is high and spill over enabled but not waited enough" do
         expect(project).to receive(:quota_available?).with("GithubRunnerVCpu", 0).and_return(false)
-        GithubInstallationSpillOption.create(vcpus_limit: 300) { it.id = installation.id }
+        GithubInstallationSpillOption.create(x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
 
         expect { nx.wait_concurrency_limit }.to nap
         expect(runner.spill_over_set?).to be(false)
@@ -404,7 +404,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
       it "waits if utilization is high, spill over enabled, and waited enough but spill vcpus limit exceeded" do
         expect(project).to receive(:quota_available?).with("GithubRunnerVCpu", 0).and_return(false)
-        GithubInstallationSpillOption.create(vcpus_limit: 300) { it.id = installation.id }
+        GithubInstallationSpillOption.create(x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
         runner.update(created_at: now - 40)
         expect(Config).to receive(:github_runner_aws_spill_vcpu_capacity).and_return(10)
         create_vm(vcpus: 16, boot_image: Config.github_ubuntu_2204_x64_aws_ami_version)
@@ -415,11 +415,23 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
       it "allocates if utilization is high but spill over enabled and waited enough" do
         expect(project).to receive(:quota_available?).with("GithubRunnerVCpu", 0).and_return(false)
-        GithubInstallationSpillOption.create(vcpus_limit: 300) { it.id = installation.id }
+        spill_option = GithubInstallationSpillOption.create(x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
         runner.update(created_at: now - 40)
 
         expect { nx.wait_concurrency_limit }.to hop("allocate_vm")
         expect(runner.spill_over_set?).to be(true)
+        expect(spill_option.reload.x64_allocated_vcpus).to eq(4)
+        expect(spill_option.arm64_allocated_vcpus).to eq(0)
+      end
+
+      it "waits if utilization is high, spill over enabled, and waited enough but per-customer spill limit exceeded" do
+        expect(project).to receive(:quota_available?).with("GithubRunnerVCpu", 0).and_return(false)
+        spill_option = GithubInstallationSpillOption.create(x64_allocated_vcpus: 1, x64_vcpus_limit: 4, arm64_vcpus_limit: 300) { it.id = installation.id }
+        runner.update(created_at: now - 40)
+
+        expect { nx.wait_concurrency_limit }.to nap
+        expect(runner.spill_over_set?).to be(false)
+        expect(spill_option.reload.x64_allocated_vcpus).to eq(1)
       end
 
       it "allocates if standard utilization is low" do
@@ -1254,6 +1266,35 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect { nx.destroy }.to hop("wait_vm_destroy")
       custom_label.reload
       expect(custom_label.allocated_runner_count).to eq(0)
+    end
+
+    it "decrements spill allocated vcpus when the runner spilled over" do
+      spill_option = GithubInstallationSpillOption.create(x64_allocated_vcpus: 10, x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
+      runner.incr_spill_over
+      expect(runner).to receive(:skip_deregistration_set?).and_return(true)
+
+      expect { nx.destroy }.to hop("wait_vm_destroy")
+      expect(spill_option.reload.x64_allocated_vcpus).to eq(6)
+    end
+
+    it "decrements arm64 spill allocated vcpus for arm runners" do
+      runner.update(label: "ubicloud-standard-4-arm")
+      spill_option = GithubInstallationSpillOption.create(arm64_allocated_vcpus: 10, x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
+      runner.incr_spill_over
+      expect(runner).to receive(:skip_deregistration_set?).and_return(true)
+
+      expect { nx.destroy }.to hop("wait_vm_destroy")
+      expect(spill_option.reload.arm64_allocated_vcpus).to eq(6)
+    end
+
+    it "logs when it fails to decrement spill allocated vcpus" do
+      spill_option = GithubInstallationSpillOption.create(x64_allocated_vcpus: 0, x64_vcpus_limit: 300, arm64_vcpus_limit: 300) { it.id = installation.id }
+      runner.incr_spill_over
+      expect(runner).to receive(:skip_deregistration_set?).and_return(true)
+      expect(Clog).to receive(:emit).with("failed to decrement spill allocated vcpus", instance_of(Hash)).and_call_original
+
+      expect { nx.destroy }.to hop("wait_vm_destroy")
+      expect(spill_option.reload.x64_allocated_vcpus).to eq(0)
     end
   end
 

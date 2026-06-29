@@ -302,6 +302,12 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     @spill_option ||= installation.spill_option
   end
 
+  # Spilled vCPUs are tracked per architecture, since x64 and arm64 draw from
+  # separate capacity pools. Returns the [allocated, limit] column names.
+  def spill_vcpus_columns
+    x64? ? [:x64_allocated_vcpus, :x64_vcpus_limit] : [:arm64_allocated_vcpus, :arm64_vcpus_limit]
+  end
+
   def before_destroy
     register_deadline(nil, 15 * 60)
     update_billing_record
@@ -364,6 +370,22 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
         spilled_vcpus = Vm.where(boot_image: AWS_AMI_VERSIONS).sum(:vcpus) || 0
         if spilled_vcpus >= Config.github_runner_aws_spill_vcpu_capacity
           Clog.emit("not allowed because of high utilization and spill capacity exceeded", {exceeded_spill_capacity: {family_utilization:, spilled_vcpus:, label: github_runner.label, arch:, repository_name: github_runner.repository_name}})
+          nap rand(5..15)
+        end
+
+        # Account for the runner's vCPUs against the installation's per-customer
+        # spill budget for this architecture, rejecting the spill if it would
+        # exceed the limit. The guarded update enforces the limit atomically;
+        # destroy decrements it.
+        allocated_column, limit_column = spill_vcpus_columns
+        new_allocated_vcpus = Sequel[allocated_column] + label_data["vcpus"]
+        updated_rows = GithubInstallationSpillOption
+          .where(id: installation.id)
+          .where(new_allocated_vcpus <= Sequel[limit_column])
+          .update(allocated_column => new_allocated_vcpus)
+
+        if updated_rows != 1
+          Clog.emit("not allowed because of high utilization and per-customer spill limit exceeded", {exceeded_spill_limit: {family_utilization:, vcpus_limit: spill_option[limit_column], label: github_runner.label, arch:, repository_name: github_runner.repository_name}})
           nap rand(5..15)
         end
 
@@ -695,6 +717,21 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
 
       if updated_rows != 1
         Clog.emit("failed to decrement custom label allocated runner count", {failed_decrement_custom_label_allocated_runner_count: {actual_label: github_runner.actual_label, label: github_runner.label, installation_id: github_runner.installation_id, repository_name: github_runner.repository_name}})
+      end
+    end
+
+    # The spill_over semaphore is only set on the high-utilization spill path,
+    # where the arch's allocated vcpus were incremented, so this balances it.
+    if github_runner.spill_over_set?
+      allocated_column, = spill_vcpus_columns
+      new_allocated_vcpus = Sequel[allocated_column] - label_data["vcpus"]
+      updated_rows = GithubInstallationSpillOption
+        .where(id: github_runner.installation_id)
+        .where(new_allocated_vcpus >= 0)
+        .update(allocated_column => new_allocated_vcpus)
+
+      if updated_rows != 1
+        Clog.emit("failed to decrement spill allocated vcpus", {failed_decrement_spill_allocated_vcpus: {label: github_runner.label, installation_id: github_runner.installation_id, repository_name: github_runner.repository_name}})
       end
     end
     hop_wait_vm_destroy
