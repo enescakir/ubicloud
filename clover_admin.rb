@@ -409,6 +409,21 @@ class CloverAdmin < Roda
     },
     "GithubInstallation" => {
       "github_page" => github_page_action,
+      "set_spill_options" => object_action("Set Spill Options", flash: "Set spill options", params: {
+        spill_ratio: {typecast: :float!, type: "number", attr: {min: 0, max: 1, step: "any"}},
+        x64_vcpus_limit: {typecast: :pos_int!, type: "number", attr: {min: 1, max: 2**31 - 1}},
+        arm64_vcpus_limit: {typecast: :pos_int!, type: "number", attr: {min: 1, max: 2**31 - 1}},
+      }) do |obj, spill_ratio, x64_vcpus_limit, arm64_vcpus_limit|
+        if (spill_option = obj.spill_option)
+          spill_option.update(enabled: true, spill_ratio:, x64_vcpus_limit:, arm64_vcpus_limit:)
+        else
+          GithubInstallationSpillOption.create(spill_ratio:, x64_vcpus_limit:, arm64_vcpus_limit:) { it.id = obj.id }
+        end
+      end,
+      "disable_spill" => object_action("Disable Spill", flash: "Disabled spill", type: :form) do |obj|
+        # Keep the row (and its ratio/limits) so spilling can be re-enabled later.
+        obj.spill_option&.update(enabled: false)
+      end,
     },
     "GithubRepository" => {
       "github_page" => github_page_action,
@@ -1429,12 +1444,13 @@ class CloverAdmin < Roda
         .left_join(Sequel[:github_installation].as(:i), id: Sequel[:r][:installation_id])
         .left_join(Sequel[:project].as(:p), id: Sequel[:i][:project_id])
         .left_join(Sequel[:project_quota].as(:pq), project_id: Sequel[:p][:id], quota_id: quota_default["id"])
+        .left_join(Sequel[:github_installation_spill_option].as(:so), id: Sequel[:i][:id])
         .left_join(Sequel[:vm].as(:v), id: Sequel[:r][:vm_id])
         .select(
           Sequel[:i][:id],
           Sequel[:i][:name],
           Sequel.pg_jsonb(Sequel[:i][:allocator_preferences]).get("family_filter").contains(["premium"]).as(:prem),
-          Sequel.cast(Sequel.pg_jsonb_op(Sequel[:p][:feature_flags]).get_text("spill_to_alien_runners"), :boolean).as(:spill),
+          Sequel[:so][:enabled].as(:spill),
           quota_expr.as(:quota),
         )
         .select_append(
@@ -1449,7 +1465,7 @@ class CloverAdmin < Roda
           *premium_sizes.map { count_f.call(v_family => "premium", v_vcpus => it).as(:"p#{it}") },
           *alien_sizes.map { count_f.call(v_family.like("m%") & Sequel.expr(v_vcpus => it)).as(:"a#{it}") },
         )
-        .group(Sequel[:i][:id], Sequel[:i][:name], :prem, :spill, :quota)
+        .group(Sequel[:i][:id], Sequel[:i][:name], :prem, Sequel[:so][:enabled], :quota)
         .reverse(:runner_vcpus, :vm_vcpus)
         .all
 
