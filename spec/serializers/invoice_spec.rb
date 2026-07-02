@@ -5,7 +5,7 @@ require_relative "../spec_helper"
 RSpec.describe Serializers::Invoice do
   let(:project) { Project.create(name: "test") }
 
-  def line_item(discount_percent: nil)
+  def line_item(discount_percent: nil, discount_name: nil)
     item = {
       "description" => "standard-2 Virtual Machine",
       "duration" => 60,
@@ -15,7 +15,7 @@ RSpec.describe Serializers::Invoice do
       "resource_family" => "standard",
     }
     if discount_percent
-      item["discount"] = {"percent" => discount_percent, "amount" => (0.5 * discount_percent / 100.0).round(3)}
+      item["discount"] = {"name" => discount_name, "percent" => discount_percent, "amount" => (0.5 * discount_percent / 100.0).round(3)}
     end
     item
   end
@@ -33,17 +33,19 @@ RSpec.describe Serializers::Invoice do
   end
 
   describe "aggregation of >100 line items" do
-    it "carries the percent through when every grouped item shares the same discount" do
-      items = Array.new(101) { line_item(discount_percent: 20) }
+    it "carries the percent and name through when every grouped item shares the same discount" do
+      items = Array.new(101) { line_item(discount_percent: 20, discount_name: "Startup Program") }
       aggregated = described_class.serialize(build_invoice(items)).items.first
       expect(aggregated.name).to start_with("101 x")
+      expect(aggregated.discount_name).to eq "Startup Program"
       expect(aggregated.discount_percent).to eq 20
       expect(aggregated.discount_amount).to be_within(0.001).of(0.1 * 101)
     end
 
-    it "drops the percent when only some grouped items are discounted" do
-      items = Array.new(60) { line_item(discount_percent: 20) } + Array.new(50) { line_item }
+    it "drops the percent and name when only some grouped items are discounted" do
+      items = Array.new(60) { line_item(discount_percent: 20, discount_name: "Startup Program") } + Array.new(50) { line_item }
       aggregated = described_class.serialize(build_invoice(items)).items.first
+      expect(aggregated.discount_name).to be_nil
       expect(aggregated.discount_percent).to be_nil
       expect(aggregated.discount_amount).to be_within(0.001).of(0.1 * 60)
     end

@@ -42,6 +42,7 @@
          if item.discount_amount > 0
            discount_humanized = Serializers::Invoice.humanized_cost(item.discount_amount)
            discount_label = item.discount_percent ? "-#{item.discount_percent}% (-#{discount_humanized})" : "-#{discount_humanized}"
+           discount_label = "#{h(item.discount_name)}: #{discount_label}" if item.discount_name
            amount_cell = ["<div>#{item.cost_humanized}</div><div class=\"text-xs text-green-600\">#{discount_label}</div>", { extra_class: "text-right", escape: false }]
          else
            amount_cell = [item.cost_humanized, { extra_class: "text-right" }]

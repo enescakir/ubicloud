@@ -451,7 +451,7 @@ RSpec.describe InvoiceGenerator do
 
     it "applies a resource_type-scoped discount to the matching line item" do
       ResourceDiscount.create(
-        project_id: p1.id, resource_type: "VmVCpu",
+        project_id: p1.id, resource_type: "VmVCpu", name: "Startup Program",
         discount_percent: 20, active_from: Time.utc(2023, 5),
       )
 
@@ -460,6 +460,7 @@ RSpec.describe InvoiceGenerator do
       expected_discount = (gross_cost * 0.2).round(3)
 
       expect(line_item["cost"]).to eq(gross_cost)
+      expect(line_item["discount"]["name"]).to eq("Startup Program")
       expect(line_item["discount"]["percent"]).to eq(20.0)
       expect(line_item["discount"]["amount"]).to eq(expected_discount)
       expect(invoice["resources"].first["cost"]).to eq((gross_cost - expected_discount).round(3))

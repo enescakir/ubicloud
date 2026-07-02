@@ -236,6 +236,17 @@ RSpec.describe Invoice do
       expect(text).to match(/-20%[^$]*\$2\.000/m)
     end
 
+    it "renders the discount name when the discount has one" do
+      update_content(
+        subtotal: 10.0, cost: 8.0, credit: 0.0, discount: 0.0,
+        resources: [{"resource_name" => "vm-test", "line_items" => [line_item(cost: 10.0, discount: {"name" => "Startup <Program>", "percent" => 20, "amount" => 2.0})]}],
+      )
+      text = pdf_text
+      expect(text).to include("Startup", "<Program>:")
+      expect(text).not_to include("&lt;")
+      expect(text).to match(/-20%[^$]*\$2\.000/m)
+    end
+
     it "renders only the dollar amount when the percent is unknown (mixed-discount aggregation)" do
       discounted = Array.new(60) { line_item(cost: 0.5, discount: {"percent" => 20, "amount" => 0.1}) }
       undiscounted = Array.new(50) { line_item(cost: 0.5) }

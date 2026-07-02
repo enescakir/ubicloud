@@ -7,6 +7,10 @@ class ResourceDiscount < Sequel::Model
 
   plugin ResourceMethods
 
+  def admin_label
+    name || ubid
+  end
+
   def matches?(line_item)
     (resource_id.nil? || resource_id == line_item[:resource_id]) &&
       (resource_type.nil? || resource_type == line_item[:resource_type]) &&

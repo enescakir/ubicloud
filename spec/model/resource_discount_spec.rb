@@ -151,6 +151,15 @@ RSpec.describe ResourceDiscount do
     end
   end
 
+  describe "#admin_label" do
+    it "uses the name when set, otherwise the ubid" do
+      rd = create(name: "Startup Program")
+      expect(rd.admin_label).to eq("Startup Program")
+      rd.update(name: nil)
+      expect(rd.admin_label).to eq(rd.ubid)
+    end
+  end
+
   describe "#matches?" do
     it "matches when all non-null columns equal the line item's values" do
       rd = described_class.new(resource_type: "VmVCpu", resource_family: "standard", location: "hetzner-fsn1")

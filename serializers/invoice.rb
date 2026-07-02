@@ -10,7 +10,7 @@ class Serializers::Invoice < Serializers::Base
     :issuer_city, :issuer_state, :issuer_postal_code, :issuer_tax_id, :issuer_trade_id, :issuer_in_eu_vat, :bank_transfer_info,
     :vat_rate, :vat_amount, :vat_amount_eur, :vat_reversed, :items)
 
-  ItemData = Data.define(:name, :description, :duration, :amount, :cost, :cost_humanized, :resource_type, :resource_family, :usage, :discount_percent, :discount_amount)
+  ItemData = Data.define(:name, :description, :duration, :amount, :cost, :cost_humanized, :resource_type, :resource_family, :usage, :discount_name, :discount_percent, :discount_amount)
 
   def self.serialize_internal(inv, options = {})
     InvoiceData.new(
@@ -55,7 +55,7 @@ class Serializers::Invoice < Serializers::Base
       vat_reversed: inv.content.dig("vat_info", "reversed"),
       items: inv.content["resources"].flat_map do |resource|
                resource["line_items"].map do |line_item|
-                 discount = line_item["discount"] || {"percent" => nil, "amount" => 0}
+                 discount = line_item["discount"] || {"name" => nil, "percent" => nil, "amount" => 0}
                  ItemData.new(
                    name: resource["resource_name"],
                    description: line_item["description"],
@@ -66,6 +66,7 @@ class Serializers::Invoice < Serializers::Base
                    resource_type: line_item["resource_type"],
                    resource_family: line_item["resource_family"],
                    usage: BillingRate.line_item_usage(line_item["resource_type"], line_item["resource_family"], line_item["amount"], line_item["duration"]),
+                   discount_name: discount["name"],
                    discount_percent: discount["percent"],
                    discount_amount: discount["amount"],
                  )
@@ -78,6 +79,8 @@ class Serializers::Invoice < Serializers::Base
                  discount_amount_sum = line_items.sum { it.discount_amount }
                  discount_percents = line_items.map(&:discount_percent).uniq
                  discount_percent = (discount_percents.length == 1) ? discount_percents.first : nil
+                 discount_names = line_items.map(&:discount_name).uniq
+                 discount_name = (discount_names.length == 1) ? discount_names.first : nil
                  ItemData.new(
                    name: "#{line_items.count} x #{description} (Aggregated)",
                    description:,
@@ -88,6 +91,7 @@ class Serializers::Invoice < Serializers::Base
                    resource_type: nil,
                    resource_family: nil,
                    usage: BillingRate.line_item_usage(line_items.first.resource_type, line_items.first.resource_family, amount_sum, duration_sum),
+                   discount_name:,
                    discount_percent:,
                    discount_amount: discount_amount_sum,
                  )

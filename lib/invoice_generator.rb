@@ -120,6 +120,7 @@ class InvoiceGenerator
               percent = rd.discount_percent.to_f
               discount_amount = (line_item_content[:cost] * percent / 100.0).round(3)
               line_item_content[:discount] = {
+                name: rd.name,
                 percent:,
                 amount: discount_amount,
               }

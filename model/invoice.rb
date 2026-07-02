@@ -2,6 +2,7 @@
 
 require_relative "../model"
 require "aws-sdk-s3"
+require "cgi"
 require "countries"
 require "prawn"
 require "prawn/table"
@@ -270,6 +271,7 @@ class Invoice < Sequel::Model
         amount = if item.discount_amount > 0
           discount_humanized = Serializers::Invoice.humanized_cost(item.discount_amount)
           discount_label = item.discount_percent ? "-#{item.discount_percent}% (-#{discount_humanized})" : "-#{discount_humanized}"
+          discount_label = "#{CGI.escapeHTML(item.discount_name)}: #{discount_label}" if item.discount_name
           "#{item.cost_humanized}\n<color rgb='#{green}'>#{discount_label}</color>"
         else
           item.cost_humanized
