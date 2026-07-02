@@ -2,7 +2,6 @@
 
 require_relative "../model"
 require "aws-sdk-s3"
-require "cgi"
 require "countries"
 require "prawn"
 require "prawn/table"
@@ -264,19 +263,18 @@ class Invoice < Sequel::Model
 
     # Row 3: Invoice items
     items = [["RESOURCE", "DESCRIPTION", "USAGE", "AMOUNT"]]
-    items += if data.items.empty?
-      [[{content: "No resources", colspan: 4, align: :center, font_style: :semibold}]]
+    discount_rows = []
+    if data.items.empty?
+      items << [{content: "No resources", colspan: 4, align: :center, font_style: :semibold}]
     else
-      data.items.map do |item|
-        amount = if item.discount_amount > 0
-          discount_humanized = Serializers::Invoice.humanized_cost(item.discount_amount)
-          discount_label = item.discount_percent ? "-#{item.discount_percent}% (-#{discount_humanized})" : "-#{discount_humanized}"
-          discount_label = "#{CGI.escapeHTML(item.discount_name)}: #{discount_label}" if item.discount_name
-          "#{item.cost_humanized}\n<color rgb='#{green}'>#{discount_label}</color>"
-        else
-          item.cost_humanized
+      data.items.each do |item|
+        items << [item.name, item.description, item.usage, item.cost_humanized]
+        if item.discount_amount > 0
+          discount_label = item.discount_name || "Discount"
+          discount_label += " (-#{item.discount_percent}%)" if item.discount_percent
+          items << ["", discount_label, "", "-#{Serializers::Invoice.humanized_cost(item.discount_amount)}"]
+          discount_rows << items.length - 1
         end
-        [item.name, item.description, item.usage, {content: amount, inline_format: true}]
       end
     end
     pdf.table items, header: true, width: pdf.bounds.width, cell_style: {size: 9, border_color: "E5E7EB", borders: [], padding: [5, 6, 12, 6], valign: :center} do
@@ -286,6 +284,18 @@ class Invoice < Sequel::Model
       style(column(0), borders: [:left, :top, :bottom])
       style(column(-1), borders: [:right, :top, :bottom], width: 70)
       style(columns(1..-2), borders: [:top, :bottom])
+      # A discount is rendered as a sub-row of its line item: drop the border
+      # between the two rows and tighten the padding so they read as one item.
+      discount_rows.each do |i|
+        style(row(i - 1), padding: [5, 6, 2, 6])
+        style(row(i - 1).columns(0), borders: [:left, :top])
+        style(row(i - 1).columns(1..-2), borders: [:top])
+        style(row(i - 1).columns(-1), borders: [:right, :top])
+        style(row(i), text_color: green, size: 8, padding: [0, 6, 12, 6])
+        style(row(i).columns(0), borders: [:left, :bottom])
+        style(row(i).columns(1..-2), borders: [:bottom])
+        style(row(i).columns(-1), borders: [:right, :bottom])
+      end
     end
     pdf.move_down 10
 

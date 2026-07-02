@@ -227,24 +227,22 @@ RSpec.describe Invoice do
       PDF::Reader.new(StringIO.new(invoice.generate_pdf)).pages.map(&:text).join(" ")
     end
 
-    it "renders the discount label for line items with a discount" do
+    it "renders the discount as a sub-row under the line item" do
       update_content(
         subtotal: 10.0, cost: 8.0, credit: 0.0, discount: 0.0,
         resources: [{"resource_name" => "vm-test", "line_items" => [line_item(cost: 10.0, discount: {"percent" => 20, "amount" => 2.0})]}],
       )
       text = pdf_text
-      expect(text).to match(/-20%[^$]*\$2\.000/m)
+      expect(text).to match(/Discount \(-20%\)[^$]*\$2\.000/m)
     end
 
     it "renders the discount name when the discount has one" do
       update_content(
         subtotal: 10.0, cost: 8.0, credit: 0.0, discount: 0.0,
-        resources: [{"resource_name" => "vm-test", "line_items" => [line_item(cost: 10.0, discount: {"name" => "Startup <Program>", "percent" => 20, "amount" => 2.0})]}],
+        resources: [{"resource_name" => "vm-test", "line_items" => [line_item(cost: 10.0, discount: {"name" => "Startup Program", "percent" => 20, "amount" => 2.0})]}],
       )
       text = pdf_text
-      expect(text).to include("Startup", "<Program>:")
-      expect(text).not_to include("&lt;")
-      expect(text).to match(/-20%[^$]*\$2\.000/m)
+      expect(text).to match(/Startup Program \(-20%\)[^$]*\$2\.000/m)
     end
 
     it "renders only the dollar amount when the percent is unknown (mixed-discount aggregation)" do
@@ -255,7 +253,7 @@ RSpec.describe Invoice do
         resources: [{"resource_name" => "vm-aggregated", "line_items" => discounted + undiscounted}],
       )
       text = pdf_text
-      expect(text).to include("-$6.000")
+      expect(text).to match(/Discount[^$]*\$6\.000/m)
       expect(text).not_to match(/-\d+%/)
     end
 
