@@ -272,7 +272,7 @@ class Invoice < Sequel::Model
         if item.discount_amount > 0
           discount_label = item.discount_name || "Discount"
           discount_label += " (-#{item.discount_percent}%)" if item.discount_percent
-          items << ["", discount_label, "", "-#{Serializers::Invoice.humanized_cost(item.discount_amount)}"]
+          items << ["", {content: discount_label, colspan: 2, align: :right}, "-#{Serializers::Invoice.humanized_cost(item.discount_amount)}"]
           discount_rows << items.length - 1
         end
       end
