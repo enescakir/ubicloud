@@ -3297,10 +3297,15 @@ components:
         name:
           description: Name of the GitHub installation (GitHub user/organization name)
           type: string
+        host:
+          description: Hostname of the GitHub instance the installation belongs to
+          type: string
+          example: github.com
       additionalProperties: false
       required:
         - id
         - name
+        - host
     Firewall:
       type: object
       properties:

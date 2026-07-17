@@ -16,26 +16,38 @@ end
 module Github
   MINUTE_BILLING_RATE_IDS = BillingRate.from_resource_type("GitHubRunnerMinutes").map { it["id"] }.freeze
 
-  def self.oauth_client
-    Octokit::Client.new(client_id: Config.github_app_client_id, client_secret: Config.github_app_client_secret)
+  # The app argument is a GithubApp record for apps registered on GitHub
+  # Enterprise instances. A nil app means our public app on github.com,
+  # whose credentials come from Config.
+  def self.oauth_client(app = nil)
+    options = if app
+      {client_id: app.client_id, client_secret: app.client_secret, api_endpoint: app.api_endpoint, web_endpoint: app.web_endpoint}
+    else
+      {client_id: Config.github_app_client_id, client_secret: Config.github_app_client_secret}
+    end
+    Octokit::Client.new(**options)
   end
 
-  def self.app_client
+  def self.app_client(app = nil)
     current = Time.now.to_i
-    private_key = OpenSSL::PKey::RSA.new(Config.github_app_private_key)
+    private_key = OpenSSL::PKey::RSA.new(app&.private_key || Config.github_app_private_key)
     key = {
       iat: current,
       exp: current + (8 * 60),
-      iss: Config.github_app_id,
+      iss: app&.app_id || Config.github_app_id,
     }
     bearer_token = JWT.encode(key, private_key, "RS256")
 
-    Octokit::Client.new(bearer_token:, per_page: 100)
+    options = {bearer_token:, per_page: 100}
+    options[:api_endpoint] = app.api_endpoint if app
+    Octokit::Client.new(**options)
   end
 
-  def self.installation_client(installation_id, auto_paginate: false, per_page: 100)
-    access_token = app_client.create_app_installation_access_token(installation_id)[:token]
-    Octokit::Client.new(access_token:, auto_paginate:, per_page:)
+  def self.installation_client(installation_id, app: nil, auto_paginate: false, per_page: 100)
+    access_token = app_client(app).create_app_installation_access_token(installation_id)[:token]
+    options = {access_token:, auto_paginate:, per_page:}
+    options[:api_endpoint] = app.api_endpoint if app
+    Octokit::Client.new(**options)
   end
 
   # :nocov:

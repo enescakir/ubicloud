@@ -23,7 +23,7 @@ RSpec.describe Prog::RedeliverGithubFailures do
 
     it "buds redelivery children and hops" do
       expect(Time).to receive(:now).and_return(time + 60 * 60).at_least(:once)
-      expect(prog).to receive(:failed_deliveries).with(time).and_return(
+      expect(prog).to receive(:failed_deliveries).with(time, app_client).and_return(
         Array.new(26).map.with_index(1) { |_, i| {guid: i, id: i, status: "Fail", delivered_at: time + 5} },
       )
       expect { prog.wait }.to hop("wait_redelivers")
@@ -31,6 +31,20 @@ RSpec.describe Prog::RedeliverGithubFailures do
         .and change(Strand, :count).by(2)
       expect(prog.strand.children.count).to eq(2)
       expect(prog.strand.children.map { it.stack.first["delivery_ids"] }).to include([26])
+      expect(prog.strand.children.map { it.stack.first["github_app_id"] }).to all(be_nil)
+    end
+
+    it "sweeps deliveries of enterprise apps too" do
+      github_app = GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+      enterprise_app_client = instance_double(Octokit::Client)
+      expect(Github).to receive(:app_client).with(nil).and_return(app_client)
+      expect(Github).to receive(:app_client).with(github_app).and_return(enterprise_app_client)
+      expect(Time).to receive(:now).and_return(time + 60 * 60).at_least(:once)
+      expect(prog).to receive(:failed_deliveries).with(time, app_client).and_return([])
+      expect(prog).to receive(:failed_deliveries).with(time, enterprise_app_client).and_return([{guid: 1, id: 1, status: "Fail", delivered_at: time + 5}])
+      expect { prog.wait }.to hop("wait_redelivers")
+        .and change(Strand, :count).by(1)
+      expect(prog.strand.children.map { it.stack.first["github_app_id"] }).to eq([github_app.id])
     end
   end
 
@@ -46,6 +60,14 @@ RSpec.describe Prog::RedeliverGithubFailures do
       expect(prog).to receive(:frame).and_return({"delivery_ids" => ["11", "21"]}).at_least(:once)
       expect(app_client).to receive(:post).with("/app/hook/deliveries/11/attempts")
       expect(app_client).to receive(:post).with("/app/hook/deliveries/21/attempts")
+      expect { prog.redeliver }.to exit({"msg" => "redelivered failures"})
+    end
+
+    it "redelivers with the client of the app from the frame" do
+      github_app = GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+      expect(prog).to receive(:frame).and_return({"delivery_ids" => ["11"], "github_app_id" => github_app.id}).at_least(:once)
+      expect(Github).to receive(:app_client).with(github_app).and_return(app_client)
+      expect(app_client).to receive(:post).with("/app/hook/deliveries/11/attempts")
       expect { prog.redeliver }.to exit({"msg" => "redelivered failures"})
     end
   end
@@ -85,7 +107,7 @@ RSpec.describe Prog::RedeliverGithubFailures do
       expect(app_client).to receive(:last_response).and_return(instance_double(Sawyer::Response, rels: {next: instance_double(Sawyer::Relation, href: "next_url")}))
       expect(Clog).to receive(:emit).with("fetched github deliveries", {fetched_github_deliveries: {total: 2, failed: 1, status: {"Fail" => 1}, page: 1, since: time}}).and_call_original
 
-      expect(prog.failed_deliveries(time, 1)).to eq([{guid: "3", id: "31", status: "Fail", delivered_at: time + 3}])
+      expect(prog.failed_deliveries(time, app_client, 1)).to eq([{guid: "3", id: "31", status: "Fail", delivered_at: time + 3}])
     end
   end
 end

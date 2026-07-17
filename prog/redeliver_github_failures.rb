@@ -1,18 +1,22 @@
 # frozen_string_literal: true
 
 class Prog::RedeliverGithubFailures < Prog::Base
-  frame_reader :delivery_ids
+  frame_reader :delivery_ids, :github_app_id
   frame_accessor :last_check_at
 
   label def wait
     last_check_time = Time.parse(last_check_at)
     remaining_seconds = 2 * 60 - (Time.now - last_check_time)
     nap remaining_seconds.to_i + 1 if remaining_seconds > 0
-    failures = failed_deliveries(last_check_time)
-    # The GitHub client has a 5 second timeout, and Strand::LEASE_EXPIRATION is 120 seconds.
-    # To stay within safe limits, we redeliver in batches of 25.
-    failures.each_slice(25) do |deliveries|
-      bud Prog::RedeliverGithubFailures, {"delivery_ids" => deliveries.map { it[:id] }}, "redeliver"
+    # The nil app is our public app on github.com; each enterprise app has
+    # its own webhook deliveries on its own instance.
+    [nil, *GithubApp.all].each do |app|
+      failures = failed_deliveries(last_check_time, Github.app_client(app))
+      # The GitHub client has a 5 second timeout, and Strand::LEASE_EXPIRATION is 120 seconds.
+      # To stay within safe limits, we redeliver in batches of 25.
+      failures.each_slice(25) do |deliveries|
+        bud Prog::RedeliverGithubFailures, {"delivery_ids" => deliveries.map { it[:id] }, "github_app_id" => app&.id}, "redeliver"
+      end
     end
     self.last_check_at = Time.now.to_s
     hop_wait_redelivers
@@ -29,10 +33,10 @@ class Prog::RedeliverGithubFailures < Prog::Base
   end
 
   def client
-    @client ||= Github.app_client
+    @client ||= Github.app_client(github_app_id && GithubApp[github_app_id])
   end
 
-  def failed_deliveries(since, max_page = 100)
+  def failed_deliveries(since, client = self.client, max_page = 100)
     all_deliveries = client.list_app_hook_deliveries
     page = 1
     while (next_url = client.last_response.rels[:next]&.href) && (since < all_deliveries.last[:delivered_at])

@@ -28,9 +28,19 @@ class Clover
       unless @project.has_valid_payment_method?
         raise_web_error("Project doesn't have valid billing information")
       end
+
+      install_url = if (host = typecast_params.str("host"))
+        app = GithubApp.first(host:)
+        unless app&.usable_by_project?(@project)
+          raise_web_error("GitHub Enterprise integration is not enabled for #{host}. For any questions or assistance, reach out to our team at support@ubicloud.com")
+        end
+        app.installation_new_url
+      else
+        "https://github.com/apps/#{Config.github_app_name}/installations/new"
+      end
       session[:github_installation_project_id] = @project.id
 
-      r.redirect "https://github.com/apps/#{Config.github_app_name}/installations/new", 302
+      r.redirect install_url, 302
     end
 
     r.on GITHUB_INSTALLATION_NAME_OR_UBID do |installation_name, installation_id|
@@ -100,7 +110,7 @@ class Clover
 
       r.on web?, "runner" do
         r.get true do
-          @runners = @installation.runners_dataset.eager(:vm).eager_graph(:strand)
+          @runners = @installation.runners_dataset.eager(:vm, installation: :github_app).eager_graph(:strand)
             .exclude(Sequel[:strand][:prog] => "Github::GithubRunnerNexus", Sequel[:strand][:label] => ["destroy", "wait_vm_destroy"])
             .reverse(Sequel[:github_runner][:created_at])
             .all

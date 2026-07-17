@@ -129,5 +129,65 @@ RSpec.describe Clover, "github" do
     expect(installation.name).to eq("test-user")
     expect(installation.type).to eq("User")
     expect(installation.project_id).to eq(project.id)
+    expect(installation.github_app_id).to be_nil
+  end
+
+  context "with a GitHub Enterprise app" do
+    let(:github_app) do
+      GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+    end
+
+    it "creates installation for the app resolved from the path" do
+      expect(Github).to receive(:oauth_client).with(github_app).and_return(oauth_client)
+      expect(oauth_client).to receive(:exchange_code_for_token).with("123123").and_return({access_token: "123"})
+      expect(Octokit::Client).to receive(:new).with(access_token: "123", api_endpoint: "https://api.acme.ghe.com/").and_return(adhoc_client)
+      expect(adhoc_client).to receive(:get).with("/user/installations").and_return({installations: [{id: 345, account: {login: "test-org", type: "Organization"}}]})
+
+      visit "/set_github_installation_project_id/#{project.ubid}"
+      visit "/github/callback/#{github_app.ubid}?code=123123&installation_id=345"
+
+      expect(page.title).to eq("Ubicloud - Active Runners")
+      created_installation = GithubInstallation[installation_id: 345]
+      expect(created_installation.github_app_id).to eq(github_app.id)
+      expect(created_installation.host).to eq("acme.ghe.com")
+    end
+
+    it "fails if the app is not registered" do
+      unknown_app_ubid = UBID.generate(UBID::TYPE_GITHUB_APP).to_s
+
+      visit "/github/callback/#{unknown_app_ubid}?code=123123&installation_id=345"
+
+      expect(page.status_code).to eq(404)
+    end
+
+    it "does not treat an enterprise installation as existing github.com installation with the same id" do
+      installation
+      expect(Github).to receive(:oauth_client).with(github_app).and_return(oauth_client)
+      expect(oauth_client).to receive(:exchange_code_for_token).with("123123").and_return({access_token: "123"})
+      expect(Octokit::Client).to receive(:new).with(access_token: "123", api_endpoint: "https://api.acme.ghe.com/").and_return(adhoc_client)
+      expect(adhoc_client).to receive(:get).with("/user/installations").and_return({installations: [{id: installation.installation_id, account: {login: "test-org", type: "Organization"}}]})
+
+      visit "/set_github_installation_project_id/#{project.ubid}"
+      visit "/github/callback/#{github_app.ubid}?code=123123&installation_id=#{installation.installation_id}"
+
+      expect(page.title).to eq("Ubicloud - Active Runners")
+      expect(page).to have_flash_notice("GitHub runner integration is enabled for #{project.name} project.")
+      expect(GithubInstallation.where(installation_id: installation.installation_id).count).to eq(2)
+    end
+
+    it "fails if the app is restricted to another project" do
+      github_app.update(project_id: user.create_project_with_default_policy("project-2").id)
+      expect(Github).to receive(:oauth_client).with(github_app).and_return(oauth_client)
+      expect(oauth_client).to receive(:exchange_code_for_token).with("123123").and_return({access_token: "123"})
+      expect(Octokit::Client).to receive(:new).with(access_token: "123", api_endpoint: "https://api.acme.ghe.com/").and_return(adhoc_client)
+      expect(adhoc_client).to receive(:get).with("/user/installations").and_return({installations: [{id: 345, account: {login: "test-org", type: "Organization"}}]})
+
+      visit "/set_github_installation_project_id/#{project.ubid}"
+      visit "/github/callback/#{github_app.ubid}?code=123123&installation_id=345"
+
+      expect(page.title).to eq("Ubicloud - GitHub Runners Integration")
+      expect(page).to have_flash_error(/^GitHub App installation failed.*/)
+      expect(GithubInstallation[installation_id: 345]).to be_nil
+    end
   end
 end

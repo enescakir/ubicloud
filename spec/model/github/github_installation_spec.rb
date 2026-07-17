@@ -42,6 +42,19 @@ RSpec.describe GithubInstallation do
     end
   end
 
+  describe "#installation_settings_url" do
+    it "returns the public app URL if the installation has no app" do
+      allow(Config).to receive(:github_app_name).and_return("runner-app")
+      expect(installation.installation_settings_url).to eq("https://github.com/apps/runner-app/installations/#{installation.installation_id}")
+    end
+
+    it "returns the enterprise app URL if the installation has an app" do
+      github_app = GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+      installation.update(github_app_id: github_app.id)
+      expect(installation.installation_settings_url).to eq("https://acme.ghe.com/apps/ubicloud-app/installations/#{installation.installation_id}")
+    end
+  end
+
   describe "#cache_storage_gib" do
     it "returns effective quota if the premium is not enabled" do
       installation.update(allocator_preferences: {})

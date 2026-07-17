@@ -65,6 +65,59 @@ RSpec.describe Clover, "github" do
     end
   end
 
+  context "when webhook is from a GitHub Enterprise app" do
+    let(:github_app) do
+      GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "enterprise-secret")
+    end
+
+    let(:enterprise_installation) do
+      GithubInstallation.create(installation_id: installation.installation_id, name: "test-org", type: "Organization", project_id: installation.project_id, github_app_id: github_app.id)
+    end
+
+    it "fails if the app is not registered" do
+      unknown_app_ubid = UBID.generate(UBID::TYPE_GITHUB_APP).to_s
+      send_webhook("workflow_job", workflow_job_payload(action: "queued"), path: "/webhook/github/#{unknown_app_ubid}", secret: "enterprise-secret")
+
+      expect(page.status_code).to eq(401)
+    end
+
+    it "fails if the signature is created with another app's secret" do
+      send_webhook("workflow_job", workflow_job_payload(action: "queued"), path: "/webhook/github/#{github_app.ubid}", secret: "secret")
+
+      expect(page.status_code).to eq(401)
+    end
+
+    it "resolves the installation of the app even if installation ids collide" do
+      enterprise_installation
+      send_webhook("workflow_job", workflow_job_payload(action: "queued"), path: "/webhook/github/#{github_app.ubid}", secret: "enterprise-secret")
+
+      expect(page.status_code).to eq(200)
+      created_runner = GithubRunner.first(installation_id: enterprise_installation.id)
+      expect(created_runner).not_to be_nil
+      expect(page.body).to eq({message: "GithubRunner[#{created_runner.ubid}] created"}.to_json)
+      expect(GithubRunner.first(installation_id: installation.id)).to be_nil
+    end
+
+    it "does not resolve enterprise installations for github.com webhooks" do
+      installation.destroy
+      enterprise_installation
+      expect(Clog).to receive(:emit).with("Unregistered installation", instance_of(Hash)).and_call_original
+      send_webhook("workflow_job", workflow_job_payload(action: "queued", installation_id: enterprise_installation.installation_id))
+
+      expect(page.status_code).to eq(200)
+      expect(page.body).to eq({error: {message: "Unregistered installation"}}.to_json)
+    end
+
+    it "destroys the app's installation when receive deleted action" do
+      enterprise_installation
+      send_webhook("installation", {action: "deleted", installation: {id: enterprise_installation.installation_id}}, path: "/webhook/github/#{github_app.ubid}", secret: "enterprise-secret")
+
+      expect(page.status_code).to eq(200)
+      expect(page.body).to eq({message: "GithubInstallation[#{enterprise_installation.ubid}] deleted"}.to_json)
+      expect(Strand.where(prog: "Github::DestroyGithubInstallation").count).to eq(1)
+    end
+  end
+
   context "when workflow_job event" do
     it "fails if installation not exists" do
       expect(Clog).to receive(:emit).with("Unregistered installation", instance_of(Hash)).and_call_original
@@ -200,14 +253,14 @@ RSpec.describe Clover, "github" do
     }
   end
 
-  def send_webhook(event, data)
+  def send_webhook(event, data, path: "/webhook/github", secret: "secret")
     data_json = data.to_json
-    page.driver.post("/webhook/github",
+    page.driver.post(path,
       data_json,
       {
         "Content-Type" => "application/json",
         "HTTP_X_GITHUB_EVENT" => event,
-        "HTTP_X_HUB_SIGNATURE_256" => "sha256=#{OpenSSL::HMAC.hexdigest("sha256", "secret", data_json)}",
+        "HTTP_X_HUB_SIGNATURE_256" => "sha256=#{OpenSSL::HMAC.hexdigest("sha256", secret, data_json)}",
       })
   end
 end

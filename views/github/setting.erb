@@ -131,7 +131,7 @@
           </div>
           <div id="configure-<%=@installation.ubid%>" class="mt-5 sm:ml-6 sm:mt-0 sm:flex sm:flex-shrink-0 sm:items-center">
             <div class="col-span-12 sm:col-span-2 flex justify-end items-end">
-              <%== part("components/button", text: "Configure", link: "https://github.com/apps/#{Config.github_app_name}/installations/#{@installation.installation_id}") %>
+              <%== part("components/button", text: "Configure", link: @installation.installation_settings_url) %>
             </div>
           </div>
         </div>

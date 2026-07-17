@@ -16,7 +16,7 @@
             <<-ITEM
             <div class="hover:bg-gray-50" role="none">
               <a href="#{path(ins)}/runner" class="flex items-center px-4 py-3 text-sm leading-6 text-gray-700">
-                <img src="https://github.com/#{ins.name}.png?size=64" alt="" class="mr-2 size-6 shrink-0 rounded-lg drop-shadow-sm">
+                <img src="https://#{ins.host}/#{ins.name}.png?size=64" alt="" class="mr-2 size-6 shrink-0 rounded-lg drop-shadow-sm">
                 <span class="#{"font-semibold" if ins.id == @installation.id}">#{ins.name}</span>
               </a>
             </div>

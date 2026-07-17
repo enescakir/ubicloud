@@ -29,7 +29,7 @@ class GithubRunner < Sequel::Model
   end
 
   def repository_url
-    "http://github.com/#{repository_name}"
+    "https://#{installation.host}/#{repository_name}"
   end
 
   def run_url

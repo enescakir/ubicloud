@@ -58,6 +58,31 @@ RSpec.describe Clover, "github" do
       expect(page.driver.request.session["login_redirect"]).to eq("/apps/runner-app/installations/new")
     end
 
+    it "can connect GitHub Enterprise account with host param" do
+      GithubApp.create(host: "acme.ghe.com", slug: "enterprise-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+
+      visit "#{project.path}/github/create?host=acme.ghe.com"
+
+      expect(URI(page.driver.current_url).host).to eq("acme.ghe.com")
+      expect(page.driver.request.session["login_redirect"]).to eq("/apps/enterprise-app/installations/new")
+    end
+
+    it "can not connect GitHub Enterprise account with unknown host" do
+      visit "#{project.path}/github/create?host=unknown.ghe.com"
+
+      expect(page.status_code).to eq(400)
+      expect(page).to have_flash_error("GitHub Enterprise integration is not enabled for unknown.ghe.com. For any questions or assistance, reach out to our team at support@ubicloud.com")
+    end
+
+    it "can not connect GitHub Enterprise account if the app is restricted to another project" do
+      GithubApp.create(host: "acme.ghe.com", slug: "enterprise-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret", project_id: project_wo_permissions.id)
+
+      visit "#{project.path}/github/create?host=acme.ghe.com"
+
+      expect(page.status_code).to eq(400)
+      expect(page).to have_flash_error("GitHub Enterprise integration is not enabled for acme.ghe.com. For any questions or assistance, reach out to our team at support@ubicloud.com")
+    end
+
     it "can not connect GitHub account if project has no valid payment method" do
       expect(Config).to receive(:stripe_secret_key).and_return("secret_key").at_least(:once)
 

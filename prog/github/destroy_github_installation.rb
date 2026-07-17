@@ -22,7 +22,7 @@ class Prog::Github::DestroyGithubInstallation < Prog::Base
 
   label def delete_installation
     begin
-      Github.app_client.delete_installation(github_installation.installation_id)
+      Github.app_client(github_installation.github_app).delete_installation(github_installation.installation_id)
     rescue Octokit::NotFound
     end
     hop_destroy_resources

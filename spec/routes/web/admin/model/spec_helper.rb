@@ -138,6 +138,10 @@ module AdminModelSpecHelper
       GcpVpc.create(project_id: project.id, location_id: location.id, name: "ubicloud-test")
     end
 
+    def create_github_app
+      GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+    end
+
     def create_github_cache_entry
       installation = GithubInstallation.create(installation_id: 123, name: "test-installation", type: "User")
       repo = GithubRepository.create(installation_id: installation.id, name: "test-repo")

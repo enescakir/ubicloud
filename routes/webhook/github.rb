@@ -3,20 +3,32 @@
 class Clover
   hash_branch(:webhook_prefix, "github") do |r|
     r.post true do
-      body = r.body.read
-      next 401 unless check_signature(r.headers["x-hub-signature-256"], body)
+      handle_github_webhook
+    end
 
-      response.content_type = :json
+    # Apps registered on GitHub Enterprise instances deliver webhooks to
+    # this endpoint with their ubid as a path segment, as installation ids
+    # are only unique within a single GitHub instance.
+    r.post :ubid_uuid do |github_app_id|
+      next 401 unless (github_app = GithubApp[github_app_id])
+      handle_github_webhook(github_app)
+    end
+  end
 
-      data = JSON.parse(body)
-      case r.headers["x-github-event"]
-      when "installation"
-        handle_installation(data)
-      when "workflow_job"
-        handle_workflow_job(data)
-      else
-        error("Unhandled event")
-      end
+  def handle_github_webhook(github_app = nil)
+    body = request.body.read
+    return 401 unless check_signature(request.headers["x-hub-signature-256"], body, github_app)
+
+    response.content_type = :json
+
+    data = JSON.parse(body)
+    case request.headers["x-github-event"]
+    when "installation"
+      handle_installation(data, github_app)
+    when "workflow_job"
+      handle_workflow_job(data, github_app)
+    else
+      error("Unhandled event")
     end
   end
 
@@ -28,16 +40,16 @@ class Clover
     {message: msg}
   end
 
-  def check_signature(signature, body)
+  def check_signature(signature, body, github_app = nil)
     return false unless signature
 
     method, actual_digest = signature.split("=")
-    expected_digest = OpenSSL::HMAC.hexdigest(method, Config.github_app_webhook_secret, body)
+    expected_digest = OpenSSL::HMAC.hexdigest(method, github_app&.webhook_secret || Config.github_app_webhook_secret, body)
     Rack::Utils.secure_compare(actual_digest, expected_digest)
   end
 
-  def handle_installation(data)
-    installation = GithubInstallation.with_github_installation_id(data["installation"]["id"])
+  def handle_installation(data, github_app = nil)
+    installation = GithubInstallation.with_github_installation_id(data["installation"]["id"], github_app:)
     case data["action"]
     when "deleted"
       return error("Unregistered installation") unless installation
@@ -50,8 +62,8 @@ class Clover
     error("Unhandled installation action")
   end
 
-  def handle_workflow_job(data)
-    unless (installation_id = data.dig("installation", "id")) && (installation = GithubInstallation.with_github_installation_id(installation_id))
+  def handle_workflow_job(data, github_app = nil)
+    unless (installation_id = data.dig("installation", "id")) && (installation = GithubInstallation.with_github_installation_id(installation_id, github_app:))
       Clog.emit("Unregistered installation", {unregistered_installation: {installation_id:, repository_name: data.dig("repository", "full_name")}})
       return error("Unregistered installation")
     end

@@ -5,6 +5,7 @@ class Serializers::GithubInstallation < Serializers::Base
     {
       id: installation.ubid,
       name: installation.name,
+      host: installation.host,
     }
   end
 end

@@ -2,14 +2,17 @@
 
 class Clover
   hash_branch("github") do |r|
-    r.get web?, "callback" do
+    # Enterprise apps register their callback URL with their ubid as a path
+    # segment, as one callback can serve multiple GitHub instances. Without
+    # a segment, the callback is for our public app on github.com.
+    github_callback = lambda do |github_app|
       no_authorization_needed
       oauth_code = typecast_params.str("code")
       installation_id = typecast_params.str("installation_id")
       setup_action = typecast_params.str("setup_action")
-      code_response = Github.oauth_client.exchange_code_for_token(oauth_code)
+      code_response = Github.oauth_client(github_app).exchange_code_for_token(oauth_code)
 
-      if (installation = GithubInstallation.with_github_installation_id(installation_id))
+      if (installation = GithubInstallation.with_github_installation_id(installation_id, github_app:))
         @project = installation.project
         authorize("Project:github", installation.project)
         flash["notice"] = "GitHub runner integration is already enabled for #{installation.project.name} project."
@@ -38,7 +41,9 @@ class Clover
       end
 
       begin
-        installation_response = Octokit::Client.new(access_token:).get("/user/installations")[:installations].find { it[:id].to_s == installation_id }
+        user_client_options = {access_token:}
+        user_client_options[:api_endpoint] = github_app.api_endpoint if github_app
+        installation_response = Octokit::Client.new(**user_client_options).get("/user/installations")[:installations].find { it[:id].to_s == installation_id }
       rescue Octokit::Unauthorized => e
         installation_octokit_error = e
       end
@@ -59,15 +64,32 @@ class Clover
         r.redirect project, "/dashboard"
       end
 
+      if github_app && !github_app.usable_by_project?(project)
+        flash["error"] = "GitHub App installation failed. For any questions or assistance, reach out to our team at support@ubicloud.com"
+        Clog.emit("GitHub callback failed due to project not allowed for the app", {installation_failed: {id: installation_id, account_ubid: current_account.ubid, github_app_host: github_app.host}})
+        r.redirect project, "/github"
+      end
+
       installation = GithubInstallation.create(
         installation_id:,
         name: installation_response[:account][:login] || installation_response[:account][:name],
         type: installation_response[:account][:type],
         project_id: project.id,
+        github_app_id: github_app&.id,
       )
 
       flash["notice"] = "GitHub runner integration is enabled for #{project.name} project."
       r.redirect installation, "/runner"
+    end
+
+    r.get web?, "callback" do
+      github_callback.call(nil)
+    end
+
+    r.get web?, "callback", :ubid_uuid do |github_app_id|
+      github_app = GithubApp[github_app_id]
+      check_found_object(github_app)
+      github_callback.call(github_app)
     end
   end
 end

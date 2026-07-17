@@ -59,6 +59,37 @@ RSpec.describe Github do
     described_class.installation_client(installation_id)
   end
 
+  context "with a GitHub Enterprise app" do
+    let(:app) do
+      GithubApp.new(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "enterprise_client_id", client_secret: "enterprise_client_secret", private_key: "enterprise_private_key", webhook_secret: "secret")
+    end
+
+    it "creates oauth client with the app's credentials and endpoints" do
+      expect(Octokit::Client).to receive(:new).with(client_id: "enterprise_client_id", client_secret: "enterprise_client_secret", api_endpoint: "https://api.acme.ghe.com/", web_endpoint: "https://acme.ghe.com/")
+
+      described_class.oauth_client(app)
+    end
+
+    it "creates app client with the app's credentials and endpoints" do
+      private_key = instance_double(OpenSSL::PKey::RSA)
+      expect(OpenSSL::PKey::RSA).to receive(:new).with("enterprise_private_key").and_return(private_key)
+      expect(JWT).to receive(:encode).with(hash_including(iss: 654321), private_key, "RS256").and_return("jwt_token")
+      expect(Octokit::Client).to receive(:new).with(bearer_token: "jwt_token", per_page: 100, api_endpoint: "https://api.acme.ghe.com/")
+
+      described_class.app_client(app)
+    end
+
+    it "creates installation client with the app's endpoint" do
+      installation_id = 123
+      app_client = instance_double(Octokit::Client)
+      expect(described_class).to receive(:app_client).with(app).and_return(app_client)
+      expect(app_client).to receive(:create_app_installation_access_token).with(installation_id).and_return({token: "abcdefg"})
+      expect(Octokit::Client).to receive(:new).with(access_token: "abcdefg", auto_paginate: false, per_page: 100, api_endpoint: "https://api.acme.ghe.com/")
+
+      described_class.installation_client(installation_id, app:)
+    end
+  end
+
   it "can map alias to actual label" do
     labels = described_class.runner_labels
     expect(labels["ubicloud"]).to eq(labels["ubicloud-standard-2-ubuntu-2404"])

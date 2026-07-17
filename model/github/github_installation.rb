@@ -4,6 +4,7 @@ require_relative "../../model"
 
 class GithubInstallation < Sequel::Model
   many_to_one :project
+  many_to_one :github_app
   one_to_many :runners, key: :installation_id, class: :GithubRunner, remover: nil, clearer: nil, is_used: true
   one_to_many :repositories, key: :installation_id, class: :GithubRepository, read_only: true, is_used: true
   one_to_many :custom_labels, class: :GithubCustomLabel, key: :installation_id, read_only: true
@@ -14,8 +15,19 @@ class GithubInstallation < Sequel::Model
   plugin ResourceMethods
   dataset_module Pagination
 
-  def self.with_github_installation_id(installation_id)
-    first(installation_id:)
+  def self.with_github_installation_id(installation_id, github_app: nil)
+    # Installation ids are only unique within a single GitHub instance, so
+    # lookups have to be scoped to the app to avoid cross-instance collisions.
+    first(installation_id:, github_app_id: github_app&.id)
+  end
+
+  def host
+    github_app&.host || "github.com"
+  end
+
+  def installation_settings_url
+    github_app&.installation_settings_url(installation_id) ||
+      "https://github.com/apps/#{Config.github_app_name}/installations/#{installation_id}"
   end
 
   def total_active_runner_vcpus
@@ -41,7 +53,7 @@ class GithubInstallation < Sequel::Model
   end
 
   def client(**)
-    Github.installation_client(installation_id, **)
+    Github.installation_client(installation_id, app: github_app, **)
   end
 
   def cache_storage_gib
@@ -61,10 +73,12 @@ end
 #  allocator_preferences | jsonb                    | NOT NULL DEFAULT '{"family_filter": ["premium", "standard"]}'::jsonb
 #  created_at            | timestamp with time zone | NOT NULL DEFAULT CURRENT_TIMESTAMP
 #  cache_scope_protected | boolean                  | NOT NULL DEFAULT true
+#  github_app_id         | uuid                     |
 # Indexes:
 #  github_installation_pkey | PRIMARY KEY btree (id)
 # Foreign key constraints:
-#  github_installation_project_id_fkey | (project_id) REFERENCES project(id)
+#  github_installation_github_app_id_fkey | (github_app_id) REFERENCES github_app(id)
+#  github_installation_project_id_fkey    | (project_id) REFERENCES project(id)
 # Referenced By:
 #  github_custom_label | github_custom_label_installation_id_fkey | (installation_id) REFERENCES github_installation(id)
 #  github_repository   | github_repository_installation_id_fkey   | (installation_id) REFERENCES github_installation(id)

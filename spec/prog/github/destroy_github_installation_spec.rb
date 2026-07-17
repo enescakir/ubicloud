@@ -77,6 +77,15 @@ RSpec.describe Prog::Github::DestroyGithubInstallation do
       expect(Github.app_client).to receive(:delete_installation).with(github_installation.installation_id).and_raise(Octokit::NotFound)
       expect { dgi.delete_installation }.to hop("destroy_resources")
     end
+
+    it "deletes installation with the enterprise app's client" do
+      github_app = GithubApp.create(host: "acme.ghe.com", slug: "ubicloud-app", app_id: 654321, client_id: "client-id", client_secret: "client-secret", private_key: "private-key", webhook_secret: "webhook-secret")
+      github_installation.update(github_app_id: github_app.id)
+      client = instance_double(Octokit::Client)
+      expect(Github).to receive(:app_client).with(github_app).and_return(client)
+      expect(client).to receive(:delete_installation).with(github_installation.installation_id)
+      expect { dgi.delete_installation }.to hop("destroy_resources")
+    end
   end
 
   describe "#destroy_resources" do
