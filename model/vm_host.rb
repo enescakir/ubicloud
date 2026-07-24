@@ -9,6 +9,7 @@ class VmHost < Sequel::Model
   one_to_many :vms, read_only: true
   one_to_many :assigned_subnets, key: :routed_to_host_id, class: :Address, read_only: true
   one_to_one :provider, key: :id, class: :HostProvider, read_only: true
+  one_to_one :inventory, key: :id, class: :VmHostInventory
   one_to_many :assigned_host_addresses, key: :host_id, read_only: true
   one_to_many :spdk_installations, remover: nil, clearer: nil
   one_to_many :vhost_block_backends, remover: nil, clearer: nil
@@ -22,7 +23,7 @@ class VmHost < Sequel::Model
 
   many_to_many :assigned_vm_addresses, join_table: :address, left_key: :routed_to_host_id, right_key: :id, right_primary_key: :address_id, read_only: true
 
-  plugin :association_dependencies, assigned_host_addresses: :destroy, assigned_subnets: :destroy, provider: :destroy, spdk_installations: :destroy, storage_devices: :destroy, pci_devices: :destroy, boot_images: :destroy, slices: :destroy, cpus: :destroy, vhost_block_backends: :destroy, gpu_partitions: :destroy
+  plugin :association_dependencies, assigned_host_addresses: :destroy, assigned_subnets: :destroy, provider: :destroy, inventory: :destroy, spdk_installations: :destroy, storage_devices: :destroy, pci_devices: :destroy, boot_images: :destroy, slices: :destroy, cpus: :destroy, vhost_block_backends: :destroy, gpu_partitions: :destroy
 
   plugin ResourceMethods
   plugin SemaphoreMethods, :checkup, :reboot, :hardware_reset, :destroy, :graceful_reboot, :configure_metrics, :patch
@@ -525,4 +526,5 @@ end
 #  vhost_block_backend   | vhost_block_backend_vm_host_id_fkey | (vm_host_id) REFERENCES vm_host(id)
 #  vm                    | vm_vm_host_id_fkey                  | (vm_host_id) REFERENCES vm_host(id)
 #  vm_host_cpu           | vm_host_cpu_vm_host_id_fkey         | (vm_host_id) REFERENCES vm_host(id)
+#  vm_host_inventory     | vm_host_inventory_id_fkey           | (id) REFERENCES vm_host(id)
 #  vm_host_slice         | vm_host_slice_vm_host_id_fkey       | (vm_host_id) REFERENCES vm_host(id)
