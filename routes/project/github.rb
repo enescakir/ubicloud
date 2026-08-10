@@ -130,6 +130,50 @@ class Clover
         end
       end
 
+      r.on web?, "usage" do
+        r.get r.accepts_json? do
+          # Show the daily usage of the last 30 days, grouped by runner family.
+          end_time = (Date.today + 1).to_time
+          begin_time = end_time - 30 * 24 * 60 * 60
+
+          daily_usages = BillingRecord
+            .where(project_id: @project.id, billing_rate_id: Github::MINUTE_BILLING_RATE_IDS)
+            .where(Sequel.|({resource_id: @installation.id}, {resource_id: @installation.repositories_dataset.select(:id)}))
+            .overlapping(begin_time, end_time)
+            .select_group(Sequel.function(:lower, :span).as(:date), :billing_rate_id)
+            .select_append { sum(:amount).as(:minutes) }
+            .all
+
+          # Runner families are billed with different rates over time, so
+          # multiple billing rates can map to the same family.
+          series = Hash.new { |hash, key| hash[key] = Hash.new { |usages, date| usages[date] = [0, 0.0] } }
+          unit_prices = {}
+          daily_usages.each do |usage|
+            billing_rate = BillingRate.from_id(usage[:billing_rate_id])
+            family = billing_rate["resource_family"]
+            unit_price = billing_rate["unit_price"]
+            unit_prices[family] ||= unit_price
+            minutes, cost = series[family][usage[:date].to_i]
+            series[family][usage[:date].to_i] = [minutes + usage[:minutes].to_i, cost + (usage[:minutes] * unit_price).to_f]
+          end
+
+          {
+            start: begin_time.to_i,
+            end: end_time.to_i,
+            series: series.sort_by { |family, _| unit_prices[family] }.map do |family, usages|
+              {
+                name: family,
+                values: usages.sort.map { |date, (minutes, cost)| [date, minutes, cost.round(4)] },
+              }
+            end,
+          }
+        end
+
+        r.get true do
+          view "github/usage"
+        end
+      end
+
       r.get web?, "cache" do
         @entries_by_repo = @installation
           .cache_entries_dataset

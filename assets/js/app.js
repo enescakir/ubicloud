@@ -5,6 +5,7 @@ $(function () {
   setupFormOptionUpdates();
   setupPlayground();
   setupMetricsCharts();
+  setupGitHubUsageChart();
   setupPgConfigCard();
   setupStructuredDataCard();
   setupLogDestinationForm();
@@ -931,6 +932,135 @@ function updateMetricsCharts() {
     chartInstance.chart.showLoading();
     queryAndUpdateChart(chartInstance, start_time, end_time);
   }
+}
+
+function setupGitHubUsageChart() {
+  const container = document.querySelector('#usage-chart');
+  if (!container) {
+    return;
+  }
+
+  const chart = echarts.init(container);
+  let usage = null;
+
+  function updateChart() {
+    const unit = $('#usage-unit').val();
+    // The server sends [timestamp, minutes, cost] for each day with usage.
+    const valueIndex = unit === 'cost' ? 2 : 1;
+
+    // Stacked bars are aligned by data index, so every series needs a value for
+    // each day another series has usage in.
+    const timestamps = [...new Set(usage.series.flatMap(series => series.values.map(value => value[0])))].sort((a, b) => a - b);
+    const chartSeries = usage.series.map(series => {
+      const values = new Map(series.values.map(value => [value[0], value[valueIndex]]));
+      return {
+        name: series.name,
+        type: 'bar',
+        stack: 'total',
+        barMaxWidth: 24,
+        emphasis: { focus: 'series' },
+        data: timestamps.map(timestamp => [timestamp * 1000, values.get(timestamp) || 0])
+      };
+    });
+
+    chart.setOption({
+      legend: { data: chartSeries.map(series => series.name) },
+      xAxis: { min: usage.start * 1000, max: usage.end * 1000 },
+      yAxis: { axisLabel: { formatter: (value) => usageFormatter(unit, value) } },
+      series: chartSeries,
+      graphic: chartSeries.length ? [] : {
+        type: 'text',
+        left: 'center',
+        top: 'middle',
+        style: {
+          text: 'No runner usage in the last 30 days',
+          fontSize: 18,
+          fill: '#6b7280'
+        }
+      }
+    }, { replaceMerge: 'series' });
+    chart.resize();
+  }
+
+  chart.setOption({
+    color: colorPalette.map(p => p.color),
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: function (params) {
+        const unit = $('#usage-unit').val();
+        const date = new Date(params[0].value[0]).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+
+        let total = 0;
+        let html = `<div class="col-span-2 font-semibold">${date}</div>`;
+        params.forEach((item) => {
+          if (item.value[1] === 0) {
+            return;
+          }
+          total += item.value[1];
+          const colorClass = colorPalette[item.componentIndex % colorPalette.length].class;
+          html += `
+            <div class="text-${colorClass} text-left">● ${item.seriesName}</div>
+            <div class="text-right font-semibold">${usageFormatter(unit, item.value[1])}</div>
+          `;
+        });
+        html += `
+          <div class="text-left border-t mt-1 pt-1">Total</div>
+          <div class="text-right font-semibold border-t mt-1 pt-1">${usageFormatter(unit, total)}</div>
+        `;
+
+        return `<div class="grid grid-cols-2 gap-x-3">${html}</div>`;
+      }
+    },
+    legend: { right: '2%' },
+    grid: { containLabel: true, left: '0%', right: '2%', top: '15%', bottom: '0%' },
+    xAxis: {
+      type: 'time',
+      axisLabel: {
+        hideOverlap: true,
+        formatter: (value) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      }
+    },
+    yAxis: { type: 'value' }
+  });
+
+  window.addEventListener('resize', debounce(chart.resize, 300));
+  $('#usage-unit').on('change', updateChart);
+
+  chart.showLoading();
+  fetch($('#usage-container').data('usage-url'), { headers: { 'Accept': 'application/json' } })
+    .then(response => response.json())
+    .then(data => {
+      usage = data;
+      chart.hideLoading();
+      updateChart();
+    })
+    .catch(error => {
+      chart.hideLoading();
+      chart.setOption({
+        graphic: {
+          type: 'text',
+          left: 'center',
+          top: 'middle',
+          style: {
+            text: 'Failed to load usage data. Please refresh the page to try again.',
+            fontSize: 18,
+            fill: '#c00'
+          }
+        }
+      });
+
+      console.error(`Error fetching usage data: ${error}`)
+    });
+}
+
+function usageFormatter(unit, value) {
+  if (unit !== 'cost') {
+    return `${value} min`;
+  }
+
+  // Show more decimals for small amounts, to not display them as $0.00.
+  return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`;
 }
 
 function durationToSeconds(durationStr) {

@@ -1,0 +1,24 @@
+<% @page_title = "Usage" %>
+<% @enable_echarts = true %>
+
+<%== render("github/tabbar") %>
+
+<div id="usage-container" data-usage-url="<%= "#{path(@installation)}/usage" %>">
+  <div class="md:flex md:items-center md:justify-between pb-2 lg:pb-4">
+    <div class="min-w-0 flex-1">
+      <h3 class="text-2xl font-bold leading-7 text-gray-900 sm:truncate sm:text-2xl sm:tracking-tight">Runner Usage</h3>
+      <p class="text-sm text-gray-500 mt-1">Daily usage of the last 30 days, grouped by runner family</p>
+    </div>
+    <select
+      id="usage-unit"
+      class="py-1.5 md:align-top rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+      name="usage-unit"
+    >
+      <option value="cost" selected>Cost</option>
+      <option value="minutes">Minutes</option>
+    </select>
+  </div>
+  <div class="overflow-hidden rounded-lg bg-white p-4 shadow">
+    <div class="h-96 w-full" id="usage-chart"></div>
+  </div>
+</div>

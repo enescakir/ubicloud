@@ -367,6 +367,68 @@ RSpec.describe Clover, "github" do
     end
   end
 
+  describe "usage" do
+    def create_usage_record(resource_id, family, amount, day: Date.today, active_from: Time.now)
+      begin_time = day.to_time
+      BillingRecord.create(
+        project_id: project.id,
+        resource_id:,
+        resource_name: "Daily Usage #{day}",
+        span: Sequel::Postgres::PGRange.new(begin_time, begin_time + 24 * 60 * 60),
+        billing_rate_id: BillingRate.from_resource_properties("GitHubRunnerMinutes", family, "global", false, active_from)["id"],
+        amount:,
+      )
+    end
+
+    it "shows the usage graph" do
+      visit "#{project.path}/github/#{installation.ubid}/runner"
+      click_link "Usage"
+
+      expect(page.status_code).to eq(200)
+      expect(page).to have_current_path("#{project.path}/github/#{installation.ubid}/usage")
+      expect(page.title).to eq("Ubicloud - Usage")
+      expect(page).to have_css("#usage-chart")
+    end
+
+    it "returns daily usage of the installation grouped by runner family" do
+      today = Date.today
+      create_usage_record(installation.id, "standard-4", 100)
+      create_usage_record(installation.id, "standard-2", 60, day: today - 1)
+      # Records of the same family with different rates are merged.
+      create_usage_record(installation.id, "standard-2", 30, active_from: Time.new(2024, 1, 1))
+      create_usage_record(installation.id, "standard-2", 10)
+      # Projects with the billing by repository feature flag bill repositories.
+      create_usage_record(repository.id, "standard-2", 5)
+      # Records of other resources and older days are not included.
+      create_usage_record(project.id, "standard-2", 1000)
+      create_usage_record(installation.id, "standard-2", 2000, day: today - 31)
+
+      today_ts = today.to_time.to_i
+      expect(usage_data).to eq(
+        "start" => (today + 1).to_time.to_i - 30 * 24 * 60 * 60,
+        "end" => (today + 1).to_time.to_i,
+        "series" => [
+          {"name" => "standard-2", "values" => [[today_ts - 24 * 60 * 60, 60, 0.06], [today_ts, 45, 0.039]]},
+          {"name" => "standard-4", "values" => [[today_ts, 100, 0.2]]},
+        ],
+      )
+    end
+
+    it "returns no series if there is no usage" do
+      expect(usage_data).to eq(
+        "start" => (Date.today + 1).to_time.to_i - 30 * 24 * 60 * 60,
+        "end" => (Date.today + 1).to_time.to_i,
+        "series" => [],
+      )
+    end
+
+    def usage_data
+      page.driver.get("#{project.path}/github/#{installation.ubid}/usage", {}, {"HTTP_ACCEPT" => "application/json"})
+      expect(page.status_code).to eq(200)
+      JSON.parse(page.body)
+    end
+  end
+
   describe "cache" do
     def create_cache_entry(**)
       GithubCacheEntry.create(key: "k#{Random.rand}", version: "v1", scope: "main", repository_id: repository.id, created_by: "3c9a861c-ab14-8218-a175-875ebb652f7b", committed_at: Time.now, **)
