@@ -11,7 +11,7 @@ class Prog::Vnet::CertNexus < Prog::Base
   REVOKE_REASON = "cessationOfOperation"
 
   ACME_CLIENT_OPTIONS = {
-    connection_options: {request: {open_timeout: 5, timeout: 10}.freeze}.freeze,
+    connection_options: {request: {open_timeout: 10, timeout: 20}.freeze}.freeze,
     bad_nonce_retry: 3,
   }.freeze
 
