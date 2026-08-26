@@ -934,26 +934,35 @@ usermod -L ubuntu
   end
 
   describe "#wait_sshable" do
-    it "naps 6 seconds if it's the first time we execute wait_sshable" do
-      expect { nx.wait_sshable }.to nap(6)
+    it "naps and increments update_firewall_rules on first run" do
+      vm.update(allocated_at: Time.now)
+      expect { nx.wait_sshable }.to nap
         .and change { vm.update_firewall_rules_set?(cached: false) }.from(false).to(true)
+    end
+
+    it "does not increment update_firewall_rules for runner vms" do
+      vm.update(allocated_at: Time.now, unix_user: "runneradmin")
+      expect { nx.wait_sshable }.to nap
+      expect(vm.update_firewall_rules_set?(cached: false)).to be false
     end
 
     it "naps if not sshable" do
       AssignedVmAddress.create(dst_vm_id: vm.id, ip: "10.0.0.1/32")
-      vm.incr_update_firewall_rules
+      vm.update(allocated_at: Time.now - 10)
       expect(Socket).to receive(:tcp).with("10.0.0.1", 22, connect_timeout: 1).and_raise Errno::ECONNREFUSED
       expect { nx.wait_sshable }.to nap(1)
     end
 
     it "hops to create_billing_record if sshable" do
       AssignedVmAddress.create(dst_vm_id: vm.id, ip: "10.0.0.1/32")
+      vm.update(allocated_at: Time.now - 10)
       vm.incr_update_firewall_rules
       expect(Socket).to receive(:tcp).with("10.0.0.1", 22, connect_timeout: 1)
       expect { nx.wait_sshable }.to hop("create_billing_record")
     end
 
     it "skips a check if ipv4 is not enabled" do
+      vm.update(allocated_at: Time.now - 10)
       vm.incr_update_firewall_rules
       expect(vm.ip4).to be_nil
       expect { nx.wait_sshable }.to hop("create_billing_record")
@@ -961,6 +970,7 @@ usermod -L ubuntu
 
     it "probes the management NIC's EIP (sshable.host) when use_separate_management_nic is set" do
       refresh_frame(nx, new_values: {"use_separate_management_nic" => true})
+      vm.update(allocated_at: Time.now - 10)
       vm.sshable.update(host: "9.9.9.9")
       AssignedVmAddress.create(dst_vm_id: vm.id, ip: "10.0.0.1/32")
       vm.incr_update_firewall_rules
