@@ -10,11 +10,15 @@ class VhostBlockBackend < Sequel::Model
 
   plugin ResourceMethods, etc_type: true
 
-  def version
+  def self.version_string(version_code)
     major = version_code / 10000
     minor = (version_code % 10000) / 100
     patch = version_code % 100
     "v#{major}.#{minor}.#{patch}"
+  end
+
+  def version
+    self.class.version_string(version_code)
   end
 
   def version=(version_str)

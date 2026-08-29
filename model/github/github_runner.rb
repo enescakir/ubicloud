@@ -15,6 +15,39 @@ class GithubRunner < Sequel::Model
 
   NOT_VM_ALLOCATED_RUNNER_LABELS = %w[start wait_concurrency_limit apply_custom_label_quota].freeze
 
+  # Collect everything log_duration reports about the runner's vm in a single
+  # query. This runs on the webhook hot path, where walking the associations
+  # one by one costs seven round trips per event.
+  VM_LOG_VALUES_DS = DB[:vm]
+    .left_join(:vm_host, id: Sequel[:vm][:vm_host_id])
+    .left_join(:aws_instance, id: Sequel[:vm][:id])
+    .left_join(
+      DB[:vm_storage_volume]
+        .where(vm_id: Sequel[:vm][:id])
+        .order(Sequel.desc(:boot))
+        .limit(1)
+        .select(:vm_id, :boot_image_id, :vhost_block_backend_id)
+        .lateral,
+      {vm_id: Sequel[:vm][:id]}, table_alias: :vsv,
+    )
+    .left_join(:boot_image, id: Sequel[:vsv][:boot_image_id])
+    .left_join(:vhost_block_backend, id: Sequel[:vsv][:vhost_block_backend_id])
+    .where(Sequel[:vm][:id] => :$vm_id)
+    .select(
+      Sequel[:vm][:arch],
+      Sequel[:vm][:cores],
+      Sequel[:vm][:vcpus],
+      Sequel[:vm][:pool_id],
+      Sequel[:vm][:vm_host_id],
+      Sequel[:vm][:boot_image].as(:vm_boot_image),
+      Sequel[:vm_host][:data_center],
+      Sequel[:aws_instance][:id].as(:aws_instance_id),
+      Sequel[:aws_instance][:instance_id],
+      Sequel[:boot_image][:version].as(:boot_image_version),
+      Sequel[:vhost_block_backend][:version_code],
+    )
+    .freeze
+
   dataset_module do
     def total_active_runner_vcpus
       left_join(:strand, id: Sequel[:github_runner][:id])
@@ -60,17 +93,17 @@ class GithubRunner < Sequel::Model
 
   def log_duration(message, duration)
     values = {ubid:, label:, repository_name:, duration: duration.round(3), conclusion: workflow_job&.dig("conclusion")}
-    if vm
-      values.merge!(vm_ubid: vm.ubid, arch: vm.arch, cores: vm.cores, vcpus: vm.vcpus, boot_image: vm.vm_storage_volumes.first&.boot_image&.version || vm.boot_image)
-      if (vhost_block_backend_version = vm.vm_storage_volumes.first&.vhost_block_backend&.version)
-        values[:vhost_block_backend_version] = vhost_block_backend_version
+    if vm_id && (row = VM_LOG_VALUES_DS.call(:first, vm_id:))
+      values.merge!(vm_ubid: UBID.to_ubid(vm_id), arch: row[:arch], cores: row[:cores], vcpus: row[:vcpus], boot_image: row[:boot_image_version] || row[:vm_boot_image])
+      if (version_code = row[:version_code])
+        values[:vhost_block_backend_version] = VhostBlockBackend.version_string(version_code)
       end
-      if vm.vm_host
-        values[:vm_host_ubid] = vm.vm_host.ubid
-        values[:data_center] = vm.vm_host.data_center
+      if (vm_host_id = row[:vm_host_id])
+        values[:vm_host_ubid] = UBID.to_ubid(vm_host_id)
+        values[:data_center] = row[:data_center]
       end
-      values[:instance_id] = vm.aws_instance.instance_id if vm.aws_instance
-      values[:vm_pool_ubid] = VmPool[vm.pool_id].ubid if vm.pool_id
+      values[:instance_id] = row[:instance_id] if row[:aws_instance_id]
+      values[:vm_pool_ubid] = UBID.to_ubid(row[:pool_id]) if row[:pool_id]
     end
     Clog.emit(message, {message => values})
   end
