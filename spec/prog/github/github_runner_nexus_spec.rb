@@ -636,13 +636,19 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "generates the jit config and hops if it was not generated before the vm became ready" do
       vm.update(allocated_at: now, provisioned_at: now)
       expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 123456}, encoded_jit_config: "AABBCC$"})
-      expect { nx.wait_vm }.to hop("setup_environment")
+      expect { nx.wait_vm }.to hop("start_runner")
       expect(runner.encoded_jit_config).to eq("AABBCC$")
     end
 
-    it "hops if vm is ready" do
+    it "hops to start_runner if the vm is ready and the config is generated" do
       vm.update(allocated_at: now, provisioned_at: now)
       runner.update(encoded_jit_config: "AABBCC$")
+      expect { nx.wait_vm }.to hop("start_runner")
+    end
+
+    it "hops to setup_environment if the vm is ready without a config" do
+      project.set_ff_early_jit_registration(false)
+      vm.update(allocated_at: now, provisioned_at: now)
       expect { nx.wait_vm }.to hop("setup_environment")
     end
 
@@ -903,12 +909,16 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
   end
 
   describe "#start_runner" do
-    before { vm.update(allocated_at: now) }
+    before do
+      vm.update(allocated_at: now)
+      # The setup commands are asserted in the setup_environment block.
+      allow(nx).to receive(:setup_commands).and_return([])
+    end
 
     it "starts the runner script with the stored jit config and hops" do
       runner.update(encoded_jit_config: "AABBCC$")
-      expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "AABBCC$", log: :on_error)
-        sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
+      expect(vm.sshable).to receive(:_cmd).with("bash", stdin: <<~COMMAND, log: :on_error)
+        echo AABBCC\\$ | sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
       COMMAND
       expect { nx.start_runner }.to hop("wait")
@@ -925,8 +935,8 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       runner.update(encoded_jit_config: "AABBCC$", allocated_at: now - 2 * 60 * 60)
       expect(client).not_to receive(:delete)
       expect(client).not_to receive(:post)
-      expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "AABBCC$", log: :on_error)
-        sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
+      expect(vm.sshable).to receive(:_cmd).with("bash", stdin: <<~COMMAND, log: :on_error)
+        echo AABBCC\\$ | sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
       COMMAND
       expect { nx.start_runner }.to hop("wait")
@@ -937,8 +947,8 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       vm.update(allocated_at: now - 20 * 60)
       expect(client).to receive(:delete).with("/repos/#{runner.repository_name}/actions/runners/123")
       expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 456}, encoded_jit_config: "NEW$"})
-      expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "NEW$", log: :on_error)
-        sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
+      expect(vm.sshable).to receive(:_cmd).with("bash", stdin: <<~COMMAND, log: :on_error)
+        echo NEW\\$ | sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
       COMMAND
       expect { nx.start_runner }.to hop("wait")
@@ -952,8 +962,8 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       vm.update(allocated_at: now - 20 * 60)
       expect(client).to receive(:delete).with("/repos/#{runner.repository_name}/actions/runners/123").and_raise(Octokit::NotFound)
       expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 456}, encoded_jit_config: "NEW$"})
-      expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "NEW$", log: :on_error)
-        sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
+      expect(vm.sshable).to receive(:_cmd).with("bash", stdin: <<~COMMAND, log: :on_error)
+        echo NEW\\$ | sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
       COMMAND
       expect { nx.start_runner }.to hop("wait")
@@ -962,8 +972,8 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "fails without a log if the ssh error doesn't match" do
       runner.update(encoded_jit_config: "AABBCC$")
-      expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "AABBCC$", log: :on_error).and_raise Sshable::SshError.new("command", "", "unknown command", 123, nil)
-        sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
+      expect(vm.sshable).to receive(:_cmd).with("bash", stdin: <<~COMMAND, log: :on_error).and_raise Sshable::SshError.new("command", "", "unknown command", 123, nil)
+        echo AABBCC\\$ | sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
       COMMAND
       expect(Clog).not_to receive(:emit).with("Failed to start runner script").and_call_original

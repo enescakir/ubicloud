@@ -459,7 +459,9 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     nap 5 unless vm.provisioned_at
 
     register_deadline("wait", 10 * 60)
-    hop_setup_environment
+    # start_runner sends the setup commands itself, so a runner that has a
+    # config skips setup_environment.
+    github_runner.encoded_jit_config ? hop_start_runner : hop_setup_environment
   end
 
   def setup_info
@@ -482,7 +484,7 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     }
   end
 
-  label def setup_environment
+  def setup_commands
     command = [NetSsh.command(<<~COMMAND, setup_info: setup_info.to_json, runtime_token: vm.runtime_token, base_url: Config.base_url)]
       # To make sure the script errors out if any command fails
       set -ueo pipefail
@@ -531,6 +533,11 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
       COMMAND
     end
 
+    command
+  end
+
+  def send_setup_commands(*commands)
+    command = setup_commands.concat(commands)
     begin
       # Remove comments and empty lines before sending them to the machine
       vm.sshable.cmd("bash", stdin: NetSsh.combine(*command, joiner: "").gsub(/^(\s*# .*)?\n/, ""), log: :on_error)
@@ -538,6 +545,12 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
       Clog.emit("ssh authentication failed", {failed_runner_authentication: github_runner})
       nap 1
     end
+  end
+
+  # The old route, for a runner whose jit config was not generated at wait_vm.
+  # Remove it together with register_runner.
+  label def setup_environment
+    send_setup_commands
     github_runner.encoded_jit_config ? hop_start_runner : hop_register_runner
   end
 
@@ -640,9 +653,9 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
       encoded_jit_config = generate_jit_config(regenerate: true)
     end
 
-    vm.sshable.cmd(<<~COMMAND, stdin: encoded_jit_config, log: :on_error)
-    sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
-    sudo systemctl start runner-script.service
+    send_setup_commands(NetSsh.command(<<~COMMAND, jit_config: encoded_jit_config))
+      echo :jit_config | sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
+      sudo systemctl start runner-script.service
     COMMAND
     github_runner.update(ready_at: Time.now, encoded_jit_config: nil)
     github_runner.log_duration("runner_registered", github_runner.ready_at - github_runner.allocated_at)
