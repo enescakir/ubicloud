@@ -385,8 +385,8 @@ end
     @frame = nil
   end
 
-  def wakeup_waiting_strand
-    strand.wakeup_waiting_strand
+  def wakeup_waiting_strand(key = "waiting_strand_id")
+    strand.wakeup_waiting_strand(key)
   end
 
   # A hop is a kind of jump, as in, like a jump instruction.
