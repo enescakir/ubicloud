@@ -213,7 +213,9 @@ class Prog::Vm::Metal::Nexus < Prog::Base
 
     if (addr = vm.ip4_string)
       begin
-        Socket.tcp(addr.to_s, 22, connect_timeout: 1) {}
+        # A short timeout, since a failed probe holds a worker thread until it
+        # gives up. See the commit message for the reasoning.
+        Socket.tcp(addr.to_s, 22, connect_timeout: 0.25) {}
       rescue SystemCallError
         nap 1
       end
