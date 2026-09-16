@@ -1947,11 +1947,10 @@ RSpec.describe CloverAdmin do
     expect(client).to receive(:workflow_run_job_logs).with("test-org/test-repo", 12345).and_return("https://example.com/logs/12345")
     expect(client).to receive(:workflow_run_job_logs).with("test-org/test-repo", 99999).and_raise(Octokit::NotFound)
 
-    fill_in "job_ids", with: "12345, , 99999, bad,"
+    fill_in "job_ids", with: "12345, , 99999,"
     click_button "Show Job Log"
     expect(page).to have_link("Job 12345: Show Log", href: "https://example.com/logs/12345")
     expect(page).to have_content("Job 99999: Octokit::NotFound: Octokit::NotFound")
-    expect(page).to have_content("Job bad: invalid job ID")
   end
 
   it "shows GitHub error for GithubRepository when job id is deprecated" do
@@ -1968,6 +1967,63 @@ RSpec.describe CloverAdmin do
     fill_in "job_ids", with: "99999"
     click_button "Show Job Log"
     expect(page).to have_content("Job 99999: Octokit::Deprecated: Octokit::Deprecated")
+  end
+
+  it "supports downloading logs of multiple jobs in a single file for GithubRepository" do
+    ins = GithubInstallation.create(installation_id: 123, name: "test-org", type: "Organization")
+    repo = GithubRepository.create(name: "test-org/test-repo", installation_id: ins.id)
+
+    visit "/model/GithubRepository/#{repo.ubid}"
+    click_link "Show Job Log"
+
+    client = double
+    expect(Github).to receive(:installation_client).and_return(client)
+    expect(client).to receive(:workflow_run_job_logs).with("test-org/test-repo", 12345).and_return("https://example.com/logs/12345")
+    expect(client).to receive(:workflow_run_job_logs).with("test-org/test-repo", 99999).and_raise(Octokit::NotFound)
+    expect(Excon).to receive(:get).with("https://example.com/logs/12345", expects: 200).and_return(instance_double(Excon::Response, body: "log of 12345"))
+
+    fill_in "job_ids", with: "12345, , 99999"
+    check "download"
+    click_button "Show Job Log"
+
+    response = page.driver.response
+    expect(response.headers["content-disposition"]).to eq "attachment; filename=\"test-org-test-repo-12345-99999-job-logs.txt\""
+    expect(response.headers["content-type"]).to eq "text/plain"
+    expect(response.body).to eq "===== Job 12345 =====\nlog of 12345\n===== Job 99999 =====\nOctokit::NotFound: Octokit::NotFound"
+  end
+
+  it "includes the error in the downloaded file if a job log cannot be fetched for GithubRepository" do
+    ins = GithubInstallation.create(installation_id: 123, name: "test-org", type: "Organization")
+    repo = GithubRepository.create(name: "test-org/test-repo", installation_id: ins.id)
+
+    visit "/model/GithubRepository/#{repo.ubid}"
+    click_link "Show Job Log"
+
+    client = double
+    expect(Github).to receive(:installation_client).and_return(client)
+    expect(client).to receive(:workflow_run_job_logs).with("test-org/test-repo", 12345).and_return("https://example.com/logs/12345")
+    expect(Excon).to receive(:get).with("https://example.com/logs/12345", expects: 200).and_raise(Excon::Error::Socket)
+
+    fill_in "job_ids", with: "12345"
+    check "download"
+    click_button "Show Job Log"
+
+    expect(page.driver.response.headers["content-disposition"]).to eq "attachment; filename=\"test-org-test-repo-12345-job-logs.txt\""
+    expect(page.driver.response.body).to eq "===== Job 12345 =====\nExcon::Error::Socket: Excon::Error (Excon::Error)"
+  end
+
+  it "fails for GithubRepository if any job id is invalid" do
+    ins = GithubInstallation.create(installation_id: 123, name: "test-org", type: "Organization")
+    repo = GithubRepository.create(name: "test-org/test-repo", installation_id: ins.id)
+
+    visit "/model/GithubRepository/#{repo.ubid}"
+    click_link "Show Job Log"
+
+    dont_raise_admin_errors do
+      fill_in "job_ids", with: "12345, bad"
+      click_button "Show Job Log"
+      expect(page).to have_content("InvalidRequest: Invalid job ID: bad")
+    end
   end
 
   it "supports suspending and unsuspending Accounts" do

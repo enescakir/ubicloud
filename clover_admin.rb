@@ -407,6 +407,9 @@ class CloverAdmin < Roda
     end
   end
 
+  # Returned by a content action to send a file attachment instead of a page.
+  Download = Data.define(:filename, :content)
+
   ObjectAction = Data.define(:label, :flash, :params, :type, :action, :pass_request, :allow_if) do
     def self.define(label, flash: nil, params: {}, type: :normal, pass_request: false, allow_if: nil, &action)
       new(label, flash, params.dup.freeze, type, action, pass_request, allow_if)
@@ -560,22 +563,37 @@ class CloverAdmin < Roda
       action "show_job_log", "Show Job Log" do
         type :content
         param :job_ids, typecast: :nonempty_str!, label: "Job IDs (comma-separated)"
-        run do |obj, job_ids|
-          client = obj.installation.client
-          items = job_ids.split(",").filter_map do |job_id|
+        param :download, typecast: :bool, type: "checkbox", required: false, label: "Download logs in a single file"
+        run do |obj, job_ids, download|
+          ids = job_ids.split(",").filter_map do |job_id|
             job_id.strip!
             next if job_id.empty?
 
-            unless (id = Integer(job_id, exception: false)) && id.between?(1, 2**63 - 1)
-              next "<li>Job #{Erubi.h(job_id)}: invalid job ID</li>"
-            end
+            id = Integer(job_id, exception: false)
+            fail CloverError.new(400, "InvalidRequest", "Invalid job ID: #{job_id}") unless id&.between?(1, 2**63 - 1)
 
-            begin
-              url = client.workflow_run_job_logs(obj.name, id)
-              "<li><a href=\"#{Erubi.h(url)}\" target=\"_blank\">Job #{id}: Show Log</a></li>"
-            rescue Octokit::Error => e
-              "<li>Job #{id}: #{e.class}: #{Erubi.h(e.message)}</li>"
+            id
+          end
+
+          client = obj.installation.client
+
+          if download
+            logs = ids.map do |id|
+              body = begin
+                Excon.get(client.workflow_run_job_logs(obj.name, id), expects: 200).body
+              rescue Octokit::Error, Excon::Error => e
+                "#{e.class}: #{e.message}"
+              end
+              "===== Job #{id} =====\n#{body}"
             end
+            next Download.new("#{obj.name.tr("/", "-")}-#{ids.join("-")}-job-logs.txt", logs.join("\n"))
+          end
+
+          items = ids.map do |id|
+            url = client.workflow_run_job_logs(obj.name, id)
+            "<li><a href=\"#{Erubi.h(url)}\" target=\"_blank\">Job #{id}: Show Log</a></li>"
+          rescue Octokit::Error => e
+            "<li>Job #{id}: #{e.class}: #{Erubi.h(e.message)}</li>"
           end
           "<ol>#{items.join}</ol>"
         end
@@ -1478,12 +1496,20 @@ class CloverAdmin < Roda
             @label = action.label
             @params = action.params
 
+            content_response = lambda do |result|
+              next view(content: result) unless result.is_a?(Download)
+
+              response.headers["content-disposition"] = "attachment; filename=\"#{result.filename}\""
+              response.headers["content-type"] = "text/plain"
+              result.content
+            end
+
             r.get(action_type != :form) do
               if action_type == :direct
                 url = action.call(@obj) || fail(CloverError.new(400, "InvalidRequest", "Action link is not available"))
                 r.redirect url
               elsif action_type == :content && @params.empty?
-                next view(content: action.call(@obj))
+                next content_response.call(action.call(@obj))
               end
               view("object_action")
             end
@@ -1498,7 +1524,7 @@ class CloverAdmin < Roda
 
               result = action.call(@obj, *params, **({request: r} if action.pass_request))
               if action_type == :content
-                view(content: result)
+                content_response.call(result)
               else
                 flash["notice"] = action.flash
                 r.redirect("/model/#{@obj.class}/#{ubid}")
