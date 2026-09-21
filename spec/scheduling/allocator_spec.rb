@@ -1311,6 +1311,55 @@ RSpec.describe Scheduling::Allocator do
       expect(vm.sshable.host).to eq(vm.ip4_string)
     end
 
+    it "retries with another address when the selected one is taken concurrently" do
+      vmh = VmHost.first
+      other_vm = create_vm
+      address = vmh.assigned_subnets.first
+      taken = address.cidr.nth(0).to_s
+      vm = create_vm(ip4_enabled: true)
+      Sshable.create_with_id(vm)
+
+      # Hand out the already assigned address first, so the create fails, then
+      # let the retry pick a free one from the same host.
+      AssignedVmAddress.create(dst_vm_id: other_vm.id, ip: taken, address_id: address.id)
+      expect(vmh).to receive(:ip4_random_vm_network).and_return([NetAddr::IPv4.parse(taken), address]).ordered
+      expect(vmh).to receive(:ip4_random_vm_network).and_call_original.ordered
+
+      Al::Allocation.update_vm(vmh, vm, needs_ip4_allocation: true)
+
+      expect(vm.reload.assigned_vm_address).not_to be_nil
+      expect(vm.assigned_vm_address.ip.to_s).not_to eq(taken)
+    end
+
+    it "fails if the host runs out of addresses while retrying" do
+      vmh = VmHost.first
+      other_vm = create_vm
+      address = vmh.assigned_subnets.first
+      taken = address.cidr.nth(0).to_s
+      vm = create_vm(ip4_enabled: true)
+      Sshable.create_with_id(vm)
+
+      AssignedVmAddress.create(dst_vm_id: other_vm.id, ip: taken, address_id: address.id)
+      expect(vmh).to receive(:ip4_random_vm_network).and_return([NetAddr::IPv4.parse(taken), address]).ordered
+      expect(vmh).to receive(:ip4_random_vm_network).and_return([nil, nil]).ordered
+
+      expect { Al::Allocation.update_vm(vmh, vm, needs_ip4_allocation: true) }.to raise_error(RuntimeError, /no ip4 addresses left/)
+    end
+
+    it "gives up after the retry budget so the allocator can pick another host" do
+      vmh = VmHost.first
+      other_vm = create_vm
+      address = vmh.assigned_subnets.first
+      taken = address.cidr.nth(0).to_s
+      vm = create_vm(ip4_enabled: true)
+      Sshable.create_with_id(vm)
+
+      AssignedVmAddress.create(dst_vm_id: other_vm.id, ip: taken, address_id: address.id)
+      expect(vmh).to receive(:ip4_random_vm_network).and_return([NetAddr::IPv4.parse(taken), address]).exactly(3).times
+
+      expect { Al::Allocation.update_vm(vmh, vm, needs_ip4_allocation: true) }.to raise_error(Sequel::ValidationFailed, /ip is already taken/)
+    end
+
     it "fails if there is no ip address available but the vm is ip4 enabled" do
       vmh = VmHost.first
       other_vm = create_vm

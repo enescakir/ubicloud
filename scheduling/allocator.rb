@@ -370,8 +370,20 @@ module Scheduling::Allocator
       update_args[:family] = vm_host.family if vm.family != "burstable"
       vm.set(**update_args)
       vm.save_with_ephemeral_net6_error_retrying(vm_host)
-      AssignedVmAddress.create(dst_vm_id: vm.id, ip: ip4.to_s, address_id: address.id) if ip4
+      assign_ip4_with_error_retrying(vm, vm_host, ip4, address) if ip4
       vm.sshable&.update(host: vm.ip4_string || vm.ip6_string)
+    end
+
+    def self.assign_ip4_with_error_retrying(vm, vm_host, ip4, address, max_retries: 2)
+      AssignedVmAddress.create(dst_vm_id: vm.id, ip: ip4.to_s, address_id: address.id)
+    rescue Sequel::ValidationFailed => e
+      if e.errors.keys == [:ip] && max_retries > 0
+        max_retries -= 1
+        ip4, address = vm_host.ip4_random_vm_network
+        fail "no ip4 addresses left" unless ip4
+        retry
+      end
+      raise
     end
 
     def initialize(candidate_host, request)
