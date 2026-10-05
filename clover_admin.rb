@@ -697,9 +697,12 @@ class CloverAdmin < Roda
         flash "Added credit"
         param :name, typecast: :nonempty_str!, required: true
         param :credit, typecast: :float!, type: "number", attr: {min: 0.01, max: 10**6, step: 0.01}, required: true
-        run do |obj, name, amount|
+        param :active_from, typecast: :date!, type: "date", label: "Active from (truncated to month)", value: ->(_) {
           now = Time.now.utc
-          obj.add_active_resource_credit(name:, amount:, active_from: Time.utc(now.year, now.month))
+          Date.new(now.year, now.month)
+        }
+        run do |obj, name, amount, active_from|
+          obj.add_active_resource_credit(name:, amount:, active_from: Time.utc(active_from.year, active_from.month))
         end
       end
 

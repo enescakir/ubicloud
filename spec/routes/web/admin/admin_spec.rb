@@ -2147,6 +2147,22 @@ RSpec.describe CloverAdmin do
     expect(rc.active_from).to eq Time.utc(t.year, t.month)
   end
 
+  it "supports adding credit to Projects with a start date" do
+    p = Project.create(name: "Default")
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add credit"
+    fill_in "name", with: "Good behavior"
+    fill_in "credit", with: "50.0"
+    fill_in "active_from", with: "2026-03-15"
+    click_button "Add credit"
+
+    expect(page).to have_flash_notice("Added credit")
+    expect(ResourceCredit.select_map(:active_from)).to eq [Time.utc(2026, 3)]
+  end
+
   it "supports updating name of ResourceCredit" do
     p = Project.create(name: "Default")
     rc = ResourceCredit.create(project_id: p.id, name: "Old name", amount: 10, active_from: Time.utc(2026, 1))
