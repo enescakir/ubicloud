@@ -950,6 +950,20 @@ NFTABLES_CONF
       expect { vs.purge_storage }.not_to raise_error
     end
 
+    it "exits silently if prep.json is empty" do
+      expect(File).to receive(:exist?).with("/vm/test/prep.json").and_return(true)
+      expect(File).to receive(:read).with("/vm/test/prep.json").and_return("")
+      expect(StorageVolume).not_to receive(:new)
+      expect { vs.purge_storage }.not_to raise_error
+    end
+
+    it "exits silently if prep.json is partially written" do
+      expect(File).to receive(:exist?).with("/vm/test/prep.json").and_return(true)
+      expect(File).to receive(:read).with("/vm/test/prep.json").and_return('{"storage_volumes": [')
+      expect(StorageVolume).not_to receive(:new)
+      expect { vs.purge_storage }.not_to raise_error
+    end
+
     it "binds gpus to nvidia when gpu_partition_id is present" do
       params = JSON.generate({
         "gpu_partition_id" => "gpu-partition-123",

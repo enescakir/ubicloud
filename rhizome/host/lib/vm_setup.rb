@@ -182,9 +182,14 @@ add element inet drop_unused_ip_packets allowed_ipv4_addresses { #{ip_net} }
     # prep.json doesn't exist, nothing more to do
     return if !File.exist?(vp.prep_json)
 
-    storage_roots = []
+    params = begin
+      JSON.parse(File.read(vp.prep_json))
+    rescue JSON::ParserError
+      # prep.json is empty or partially written after a host crash
+      return
+    end
 
-    params = JSON.parse(File.read(vp.prep_json))
+    storage_roots = []
 
     if params["gpu_partition_id"]
       pci_devices = params.fetch("pci_devices", [])
