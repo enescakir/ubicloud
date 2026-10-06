@@ -2163,6 +2163,125 @@ RSpec.describe CloverAdmin do
     expect(ResourceCredit.select_map(:active_from)).to eq [Time.utc(2026, 3)]
   end
 
+  it "supports adding discount to Projects" do
+    p = Project.create(name: "Default")
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add discount"
+    fill_in "name", with: "Partner discount"
+    fill_in "discount_percent", with: "12.5"
+    click_button "Add discount"
+
+    expect(page).to have_flash_notice("Added discount")
+    expect(page.title).to eq "Ubicloud Admin - Project #{p.ubid}"
+    rd = ResourceDiscount.all
+    expect(rd.length).to eq 1
+    rd = rd.first
+    expect(rd.project_id).to eq p.id
+    expect(rd.discount_percent).to eq 12.5
+    expect(rd.name).to eq "Partner discount"
+    t = Time.now.utc
+    expect(rd.active_from).to eq Time.utc(t.year, t.month)
+    expect(rd.active_to).to be_nil
+    expect(rd.values.values_at(:resource_type, :resource_family, :location)).to eq [nil, nil, nil]
+  end
+
+  it "supports adding discount to Projects with a start date" do
+    p = Project.create(name: "Default")
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add discount"
+    fill_in "name", with: "Partner discount"
+    fill_in "discount_percent", with: "10"
+    fill_in "active_from", with: "2026-03-15"
+    click_button "Add discount"
+
+    expect(page).to have_flash_notice("Added discount")
+    expect(ResourceDiscount.select_map(:active_from)).to eq [Time.utc(2026, 3)]
+  end
+
+  it "supports adding scoped discount to Projects" do
+    p = Project.create(name: "Default")
+    ResourceDiscount.create(project_id: p.id, name: "Postgres", discount_percent: 10, active_from: Time.utc(2026, 1), resource_type: "PostgresVCpu")
+    ResourceDiscount.create(project_id: p.id, name: "Other location", discount_percent: 10, active_from: Time.utc(2026, 1), resource_type: "VmVCpu", location: "eu-central-1")
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add discount"
+    fill_in "name", with: "VM discount"
+    fill_in "discount_percent", with: "20"
+    select "VmVCpu", from: "resource_type"
+    select "standard", from: "resource_family"
+    select "hetzner-fsn1", from: "location"
+    click_button "Add discount"
+
+    expect(page).to have_flash_notice("Added discount")
+    rd = ResourceDiscount.first(name: "VM discount")
+    expect(rd.resource_type).to eq "VmVCpu"
+    expect(rd.resource_family).to eq "standard"
+    expect(rd.location).to eq "hetzner-fsn1"
+  end
+
+  it "shows an error when adding a scoped discount that overlaps a discount of the same scope to Projects" do
+    p = Project.create(name: "Default")
+    ResourceDiscount.create(project_id: p.id, name: "Existing", discount_percent: 10, active_from: Time.utc(2026, 1), resource_type: "VmVCpu")
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add discount"
+    fill_in "name", with: "VM discount"
+    fill_in "discount_percent", with: "20"
+    select "VmVCpu", from: "resource_type"
+    select "hetzner-fsn1", from: "location"
+    dont_raise_admin_errors do
+      click_button "Add discount"
+      expect(page).to have_content "InvalidRequest: Discount overlaps with an existing discount"
+    end
+    expect(ResourceDiscount.select_map(:name)).to eq ["Existing"]
+  end
+
+  it "shows an error when adding an overlapping discount to Projects" do
+    p = Project.create(name: "Default")
+    ResourceDiscount.create(project_id: p.id, name: "Existing", discount_percent: 10, active_from: Time.utc(2026, 1))
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add discount"
+    fill_in "name", with: "Partner discount"
+    fill_in "discount_percent", with: "20"
+    dont_raise_admin_errors do
+      click_button "Add discount"
+      expect(page).to have_content "InvalidRequest: Discount overlaps with an existing discount"
+    end
+    expect(ResourceDiscount.select_map(:name)).to eq ["Existing"]
+  end
+
+  it "allows adding discount to Projects after an ended discount" do
+    p = Project.create(name: "Default")
+    ResourceDiscount.create(project_id: p.id, name: "Ended", discount_percent: 10, active_from: Time.utc(2026, 1), active_to: Time.utc(2026, 3))
+    other = Project.create(name: "Other")
+    ResourceDiscount.create(project_id: other.id, name: "Other project", discount_percent: 10, active_from: Time.utc(2026, 1))
+
+    fill_in "UBID, UUID, or prefix:term", with: p.ubid
+    click_button "Show Object"
+
+    click_link "Add discount"
+    fill_in "name", with: "Partner discount"
+    fill_in "discount_percent", with: "20"
+    fill_in "active_from", with: "2026-03-01"
+    click_button "Add discount"
+
+    expect(page).to have_flash_notice("Added discount")
+    expect(p.reload.active_resource_discounts.map(&:name)).to eq ["Partner discount"]
+  end
+
   it "supports updating name of ResourceCredit" do
     p = Project.create(name: "Default")
     rc = ResourceCredit.create(project_id: p.id, name: "Old name", amount: 10, active_from: Time.utc(2026, 1))

@@ -470,6 +470,10 @@ class CloverAdmin < Roda
 
   MAX_PAGE_SNOOZE_MINUTES = 2 * 24 * 60
 
+  DISCOUNT_SCOPE_OPTIONS = %w[resource_type resource_family location].to_h { |column|
+    [column.to_sym, BillingRate.rates.map { it[column] }.uniq.sort!.freeze]
+  }.freeze
+
   BILLING_COUNTRY_OPTIONS = ISO3166::Country.all.reject { Config.sanctioned_countries.include?(it.alpha2) }.sort_by!(&:common_name).map! { [it.common_name, it.alpha2].freeze }.freeze
 
   Object.new.instance_exec do
@@ -693,16 +697,39 @@ class CloverAdmin < Roda
     end
 
     model Project do
+      current_month_start = ->(_) {
+        now = Time.now.utc
+        Date.new(now.year, now.month)
+      }
+
       action "add_credit", "Add credit" do
         flash "Added credit"
         param :name, typecast: :nonempty_str!, required: true
         param :credit, typecast: :float!, type: "number", attr: {min: 0.01, max: 10**6, step: 0.01}, required: true
-        param :active_from, typecast: :date!, type: "date", label: "Active from (truncated to month)", value: ->(_) {
-          now = Time.now.utc
-          Date.new(now.year, now.month)
-        }
+        param :active_from, typecast: :date!, type: "date", label: "Active from (truncated to month)", value: current_month_start
         run do |obj, name, amount, active_from|
           obj.add_active_resource_credit(name:, amount:, active_from: Time.utc(active_from.year, active_from.month))
+        end
+      end
+
+      action "add_discount", "Add discount" do
+        flash "Added discount"
+        param :name, typecast: :nonempty_str!, required: true
+        param :discount_percent, typecast: :float!, type: "number", attr: {min: 0.01, max: 100, step: 0.01}, required: true
+        param :active_from, typecast: :date!, type: "date", label: "Active from (truncated to month)", value: current_month_start
+        param :resource_type, typecast: :nonempty_str, type: "select", add_blank: true, required: nil, options: DISCOUNT_SCOPE_OPTIONS[:resource_type]
+        param :resource_family, typecast: :nonempty_str, type: "select", add_blank: true, required: nil, options: DISCOUNT_SCOPE_OPTIONS[:resource_family]
+        param :location, typecast: :nonempty_str, type: "select", add_blank: true, required: nil, options: DISCOUNT_SCOPE_OPTIONS[:location]
+        run do |obj, name, discount_percent, active_from, resource_type, resource_family, location|
+          active_from = Time.utc(active_from.year, active_from.month)
+          scope = {resource_type:, resource_family:, location:}
+          ds = ResourceDiscount.where(project_id: obj.id).where(Sequel.|({active_to: nil}, Sequel[:active_to] > active_from))
+          scope.each do |column, value|
+            ds = ds.where(Sequel.|({column => nil}, {column => value})) if value
+          end
+          fail CloverError.new(400, "InvalidRequest", "Discount overlaps with an existing discount") unless ds.empty?
+
+          ResourceDiscount.create(project_id: obj.id, name:, discount_percent:, active_from:, **scope)
         end
       end
 
