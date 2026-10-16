@@ -990,6 +990,14 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect { nx.wait_vm }.to raise_error Octokit::Conflict
     end
 
+    it "destroys the runner if the generate request fails due to 'Octokit::NotFound'" do
+      vm.update(allocated_at: now)
+      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s)).and_raise(Octokit::NotFound)
+      expect(Clog).to receive(:emit).with("Repository not found", {repository_not_found: {installation_ubid: runner.installation.ubid, label: runner.label, repository_name: runner.repository_name}}).and_call_original
+      expect { nx.wait_vm }.to nap(0)
+      expect(runner.destroy_set?).to be(true)
+    end
+
     it "handles common GitHub API errors during generation" do
       vm.update(allocated_at: now)
       expect(client).to receive(:post).and_raise(Octokit::Error.new({body: "Repository level self-hosted runners are disabled"}))
@@ -1287,6 +1295,17 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       COMMAND
       expect { nx.start_runner }.to hop("wait")
       expect(runner.runner_id).to eq(456)
+    end
+
+    it "destroys the runner if the generate request fails due to 'Octokit::NotFound' while regenerating the jit config" do
+      runner.update(encoded_jit_config: "OLD$", allocated_at: now - 20 * 60)
+      vm.update(allocated_at: now - 20 * 60)
+      expect(client).to receive(:delete).with("/repos/#{runner.repository_name}/actions/runners/123").and_raise(Octokit::NotFound)
+      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s)).and_raise(Octokit::NotFound)
+      expect(vm.sshable).not_to receive(:_cmd)
+      expect { nx.start_runner }.to nap(0)
+      expect(runner.destroy_set?).to be(true)
+      expect(runner.runner_id).to be_nil
     end
 
     it "fails without a log if the ssh error doesn't match" do

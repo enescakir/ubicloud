@@ -661,6 +661,10 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     github_runner.update(runner_id:, ready_at: Time.now)
     hop_wait
   rescue Octokit::NotFound
+    handle_repository_not_found
+  end
+
+  def handle_repository_not_found
     Clog.emit("Repository not found", {repository_not_found: {installation_ubid: github_runner.installation.ubid, label: github_runner.label, repository_name: github_runner.repository_name}})
     github_runner.incr_destroy
     nap 0
@@ -703,6 +707,8 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     Clog.emit("Deregistering runner because it already exists", [github_runner, {existing_runner: {runner_id: runner.fetch(:id)}}])
     client.delete(runners_path(runner.fetch(:id)))
     nap 5
+  rescue Octokit::NotFound
+    handle_repository_not_found
   end
 
   label def start_runner
