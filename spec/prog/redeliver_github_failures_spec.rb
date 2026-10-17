@@ -36,17 +36,45 @@ RSpec.describe Prog::RedeliverGithubFailures do
 
   describe "#wait_redelivers" do
     it "registers deadline and reaps wait" do
-      expect(prog).to receive(:register_deadline).with("wait", 10 * 60)
+      expect(prog).to receive(:register_deadline).with("wait", 30 * 60)
       expect { prog.wait_redelivers }.to hop("wait")
     end
   end
 
   describe "#redeliver" do
+    subject(:prog) {
+      described_class.new(Strand.create(prog: "RedeliverGithubFailures", label: "redeliver", stack: [{"delivery_ids" => ["11", "21"]}]))
+    }
+
     it "redelivers the given delivery ids" do
-      expect(prog).to receive(:frame).and_return({"delivery_ids" => ["11", "21"]}).at_least(:once)
       expect(app_client).to receive(:post).with("/app/hook/deliveries/11/attempts")
       expect(app_client).to receive(:post).with("/app/hook/deliveries/21/attempts")
       expect { prog.redeliver }.to exit({"msg" => "redelivered failures"})
+    end
+
+    it "naps until the rate limit resets and keeps the undelivered ids" do
+      allow(Time).to receive(:now).and_return(time)
+      expect(app_client).to receive(:post).with("/app/hook/deliveries/11/attempts")
+      expect(app_client).to receive(:post).with("/app/hook/deliveries/21/attempts").and_raise(rate_limit_error({"x-ratelimit-reset" => (time + 300).to_i.to_s}))
+
+      expect { prog.redeliver }.to nap(300)
+        .and change { prog.strand.stack.first["delivery_ids"] }.from(["11", "21"]).to(["21"])
+    end
+
+    it "naps for the retry-after duration of the secondary rate limit" do
+      expect(app_client).to receive(:post).with("/app/hook/deliveries/11/attempts").and_raise(rate_limit_error({"retry-after" => "120"}, Octokit::AbuseDetected))
+
+      expect { prog.redeliver }.to nap(120)
+    end
+
+    it "naps for a minute if the reset time is unknown" do
+      expect(app_client).to receive(:post).with("/app/hook/deliveries/11/attempts").and_raise(rate_limit_error({}))
+
+      expect { prog.redeliver }.to nap(60)
+    end
+
+    def rate_limit_error(headers, klass = Octokit::TooManyRequests)
+      klass.new(Faraday::Env.from(status: 403, response_headers: Faraday::Utils::Headers.new(headers)))
     end
   end
 

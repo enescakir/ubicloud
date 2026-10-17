@@ -1,8 +1,7 @@
 # frozen_string_literal: true
 
 class Prog::RedeliverGithubFailures < Prog::Base
-  frame_reader :delivery_ids
-  frame_accessor :last_check_at
+  frame_accessor :delivery_ids, :last_check_at
 
   label def wait
     last_check_time = Time.new(last_check_at)
@@ -19,12 +18,27 @@ class Prog::RedeliverGithubFailures < Prog::Base
   end
 
   label def wait_redelivers
-    register_deadline("wait", 10 * 60)
+    register_deadline("wait", 30 * 60)
     reap(:wait)
   end
 
   label def redeliver
-    delivery_ids.each { client.post("/app/hook/deliveries/#{it}/attempts") }
+    # Drop each delivery from the frame after it is redelivered, so a rate
+    # limited run continues from where it stopped instead of redelivering the
+    # same failures again.
+    while (delivery_id = delivery_ids.first)
+      begin
+        client.post("/app/hook/deliveries/#{delivery_id}/attempts")
+      rescue Octokit::TooManyRequests, Octokit::AbuseDetected => ex
+        # The secondary rate limit reports "retry-after", the primary one
+        # reports the reset time in the rate limit headers.
+        retry_after = ex.response_headers&.fetch("retry-after", nil)
+        seconds = (retry_after || ex.context&.resets_in).to_i.clamp(60, 60 * 60)
+        Clog.emit("github redelivery is rate limited", {github_redelivery_rate_limited: {remaining: delivery_ids.count, nap: seconds}})
+        nap seconds
+      end
+      self.delivery_ids = delivery_ids.drop(1)
+    end
     pop "redelivered failures"
   end
 
