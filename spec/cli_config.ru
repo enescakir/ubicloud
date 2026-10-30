@@ -62,6 +62,13 @@ c = Class.new(Roda) do
           rest << "-dnew"
         end
         rest.join("\0")
+      when "open"
+        response["ubi-open-url"] = argv[1]
+        "Open: #{argv[1]}\n"
+      when "open-confirm"
+        response["ubi-open-url"] = argv[1]
+        response["ubi-confirm"] = "Code"
+        "Open: #{argv[1]}\n"
       when "error"
         response.status = 400
         argv.join(" ") << "\n"

@@ -14,9 +14,10 @@ RSpec.describe Clover, "cli gh connect" do
     expect(app_client).to receive(:installation).with(123).and_return({account: {login: "test-org", type: "Organization"}})
   end
 
-  it "shows the GitHub App installation URL and asks for the code" do
+  it "opens the GitHub App installation URL and asks for the code" do
     body = cli(%w[gh connect], confirm_prompt: "Code")
-    url = body[%r{https://github\.com\S+}]
+    url = last_response["ubi-open-url"]
+    expect(body).to include(url)
     expect(url).to start_with("https://github.com/apps/test-app/installations/new?state=")
     expect(GithubConnectRequest.with_state(url.split("state=").last).project_id).to eq @project.id
     expect(body).to eq <<~END

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -102,12 +103,46 @@ func handleSuccess(resp *http.Response, args []string) {
 	if prog := resp.Header.Get("ubi-command-execute"); prog != "" {
 		executeValidatedCommand(prog, resp)
 	} else if prompt := resp.Header.Get("ubi-confirm"); prompt != "" {
-		handleConfirmation(prompt, resp.Body, args)
+		handleConfirmation(prompt, resp, args)
 	} else {
 		_, err := io.Copy(os.Stdout, resp.Body)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "! Error copying response body to stdout\n")
 		}
+		openResponseURL(resp)
+	}
+}
+
+func openResponseURL(resp *http.Response) {
+	url := resp.Header.Get("ubi-open-url")
+	if url == "" {
+		return
+	}
+	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+		fmt.Fprintf(os.Stderr, "! Invalid server response, not opening non-HTTP URL\n")
+		os.Exit(1)
+	}
+
+	var cmd *exec.Cmd
+	if browser := os.Getenv("UBI_BROWSER"); browser != "" {
+		cmd = exec.Command(browser, url)
+	} else {
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			cmd = exec.Command("xdg-open", url)
+		}
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	debugLog("open: %s\n", url)
+	// The URL is already printed, so the user can open it manually on failure
+	if err := cmd.Run(); err != nil {
+		debugLog("failed to open browser: %v\n", err)
 	}
 }
 
@@ -176,18 +211,19 @@ func executeValidatedCommand(prog string, resp *http.Response) {
 	}
 }
 
-func handleConfirmation(prompt string, body io.Reader, args []string) {
+func handleConfirmation(prompt string, resp *http.Response, args []string) {
 	if !allowConfirmation {
 		fmt.Fprintf(os.Stderr, "! Invalid server response, repeated confirmation attempt\n")
 		os.Exit(1)
 	}
 
 	allowConfirmation = false
-	_, err := io.Copy(os.Stdout, body)
+	_, err := io.Copy(os.Stdout, resp.Body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "! Error copying response body to stdout\n")
 		os.Exit(1)
 	}
+	openResponseURL(resp)
 	fmt.Printf("\n%s: ", prompt)
 
 	scanner := bufio.NewScanner(os.Stdin)

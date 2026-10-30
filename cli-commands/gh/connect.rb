@@ -21,7 +21,7 @@ class UbiCli
         response(body)
       else
         url = sdk.github_installation.connect_url
-        response(<<~END, headers: {"ubi-confirm" => "Code"})
+        response(<<~END, headers: {"ubi-open-url" => url, "ubi-confirm" => "Code"})
           Open the following URL in your browser to install the Ubicloud GitHub App:
 
           #{url}

@@ -25,6 +25,30 @@ get_prog = lambda do |prog|
   ENV["UBI_#{prog.upcase}"] || prog
 end
 
+open_response_url = lambda do |response|
+  return unless (open_url = response["ubi-open-url"])
+
+  unless open_url.start_with?("https://", "http://")
+    warn "! Invalid server response, not opening non-HTTP URL"
+    exit 1
+  end
+
+  if ENV["UBI_DEBUG"] == "1"
+    p [:open, open_url]
+  end
+  opener = if (browser = ENV["UBI_BROWSER"])
+    [browser]
+  else
+    case RUBY_PLATFORM
+    when /darwin/ then ["open"]
+    when /mswin|mingw/ then ["rundll32", "url.dll,FileProtocolHandler"]
+    else ["xdg-open"]
+    end
+  end
+  # The URL is already printed, so the user can open it manually on failure
+  system(*opener, open_url)
+end
+
 uri = URI(url)
 argv = ARGV
 headers = {
@@ -110,6 +134,7 @@ confirmation = nil
           exit 1
         else
           $stdout.print response.body
+          open_response_url[response]
           $stdout.print "\n#{confirmation_prompt}: "
           confirmation = $stdin.readline.chomp
           argv.unshift(confirmation)
@@ -118,6 +143,7 @@ confirmation = nil
         end
       else
         $stdout.print response.body
+        open_response_url[response]
       end
       exit 0
     end

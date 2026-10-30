@@ -35,6 +35,7 @@ RSpec.describe "bin/ubi" do
       "UBI_SSH" => "/bin/echo",
       "UBI_PG_DUMPALL" => "/bin/echo",
       "UBI_PSQL" => RbConfig.ruby,
+      "UBI_BROWSER" => "/bin/echo",
     }.freeze
     @debug_env = @env.merge("UBI_DEBUG" => "1")
     @skip_leaked_thread_check = true
@@ -217,6 +218,46 @@ RSpec.describe "bin/ubi" do
     o, e, s = Open3.capture3(@env, @prog, "exec", "ssh", "new2", "foo")
     expect(o).to eq ""
     expect(e).to eq "! Invalid server response, multiple arguments not in submitted argv\n"
+    expect(s.exitstatus).to eq 1
+  end
+
+  it "opens URL in browser if ubi-open-url response header is present" do
+    o, e, s = Open3.capture3(@env, @prog, "open", "https://example.com/foo")
+    expect(o).to eq "Open: https://example.com/foo\nhttps://example.com/foo\n"
+    expect(e).to eq ""
+    expect(s.exitstatus).to eq 0
+  end
+
+  it "shows opened URL when using UBI_DEBUG" do
+    o, e, s = Open3.capture3(@debug_env, @prog, "open", "http://example.com/foo")
+    expect(o).to match(%r{
+      sending.*open.*http://example.com/foo"?\]\n
+      Open:\ http://example.com/foo\n
+      .*open.*http://example.com/foo"?\]?\n
+      http://example.com/foo\n\z
+    }x)
+    expect(e).to eq ""
+    expect(s.exitstatus).to eq 0
+  end
+
+  it "opens URL in browser before asking for confirmation" do
+    o, e, s = Open3.capture3(@env, @prog, "open-confirm", "https://example.com/foo", stdin_data: "valid")
+    expect(o).to eq "Open: https://example.com/foo\nhttps://example.com/foo\n\nCode: valid-confirm: https://example.com/foo"
+    expect(e).to eq ""
+    expect(s.exitstatus).to eq 0
+  end
+
+  it "does not fail if browser cannot be opened" do
+    o, e, s = Open3.capture3(@env.merge("UBI_BROWSER" => "false"), @prog, "open", "https://example.com/foo")
+    expect(o).to eq "Open: https://example.com/foo\n"
+    expect(e).to eq ""
+    expect(s.exitstatus).to eq 0
+  end
+
+  it "does not open non-HTTP URL" do
+    o, e, s = Open3.capture3(@env, @prog, "open", "file:///etc/passwd")
+    expect(o).to eq "Open: file:///etc/passwd\n"
+    expect(e).to eq "! Invalid server response, not opening non-HTTP URL\n"
     expect(s.exitstatus).to eq 1
   end
 end
