@@ -12,6 +12,14 @@ module Ubicloud
 
     set_columns :id, :name, :key, :size
 
+    def self.connect_url(adapter)
+      adapter.post("#{fragment}/connect")[:url]
+    end
+
+    def self.create(adapter, code:)
+      new(adapter, adapter.post(fragment.to_s, code:))
+    end
+
     # Create a new GithubInstallation instance. +values+ can be:
     #
     # * a string (treated as an id if in valid GithubInstallation id format,
