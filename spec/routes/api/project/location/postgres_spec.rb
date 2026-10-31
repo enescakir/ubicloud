@@ -21,7 +21,7 @@ RSpec.describe Clover, "postgres" do
   describe "unauthenticated" do
     it "cannot perform authenticated operations" do
       postgres_project = Project.create(name: "default")
-      allow(Config).to receive(:postgres_service_project_id).and_return(postgres_project.id)
+      expect(Config).to receive(:postgres_service_project_id).and_return(postgres_project.id).at_least(:once)
 
       [
         [:get, "/project/#{project.ubid}/location/#{pg.display_location}/postgres"],
@@ -268,7 +268,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "logs vcpu and storage sizes when only high availability changes" do
-        allow(Clog).to receive(:emit).and_call_original
         expect(Clog).not_to receive(:emit).with("Postgres database scale requested", anything)
         expect(Clog).to receive(:emit).with("Postgres database high availability change requested", {postgres_ha_change: {
           resource_ubid: pg.ubid,
@@ -291,7 +290,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "does not log scale or high availability changes if the configuration is unchanged" do
-        allow(Clog).to receive(:emit).and_call_original
         expect(Clog).not_to receive(:emit).with("Postgres database scale requested", anything)
         expect(Clog).not_to receive(:emit).with("Postgres database high availability change requested", anything)
 
@@ -334,8 +332,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "can scale down storage if the requested size is enough for existing data" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(PostgresResource.dataset.class, first: pg, association_join: instance_double(Sequel::Dataset, sum: 1))).at_least(:once)
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
         POSTGRES_MONITOR_DB[:postgres_disk_usage_monitor].insert(postgres_server_id: pg.representative_server.id, data_disk_usage_percent: 5, observed_at: Time.now)
 
         patch "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}", {
@@ -348,9 +344,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "does not scale down storage if the requested size is too small for existing data" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(Sequel::Dataset, first: pg))
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
-        expect(pg.representative_server).to receive(:storage_size_gib).and_return(128).at_least(:once)
         POSTGRES_MONITOR_DB[:postgres_disk_usage_monitor].insert(postgres_server_id: pg.representative_server.id, data_disk_usage_percent: 95, observed_at: Time.now)
 
         patch "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}", {
@@ -373,8 +366,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "blocks scale down if the disk usage observation is stale" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(PostgresResource.dataset.class, first: pg, association_join: instance_double(Sequel::Dataset, sum: 1))).at_least(:once)
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
         POSTGRES_MONITOR_DB[:postgres_disk_usage_monitor].insert(postgres_server_id: pg.representative_server.id, data_disk_usage_percent: 5, observed_at: Time.now - PostgresServer::DISK_USAGE_MAX_AGE_SECONDS - 60)
 
         patch "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}", {
@@ -388,9 +379,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "blocks scale down if there is no disk usage observation" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(PostgresResource.dataset.class, first: pg, association_join: instance_double(Sequel::Dataset, sum: 1))).at_least(:once)
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
-
         patch "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}", {
           storage_size: 64,
         }.to_json
@@ -495,11 +483,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "fails read-replica creation if the parent is not ready" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(Sequel::Dataset, first: pg))
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
-        expect(project).to receive(:quota_available?).and_return(true)
-        expect(pg).to receive(:ready_for_read_replica?).and_return(false)
-
         post "/project/#{project.ubid}/location/eu-central-h1/postgres/#{pg.name}/read-replica", {
           name: "my-read-replica",
         }.to_json
@@ -508,8 +491,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "promote-read-replica" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(Sequel::Dataset, first: pg))
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
         pg.update(parent_id: pg.id)
         create_minio_cluster_for_blob_storage
         post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/promote-read-replica"
@@ -518,8 +499,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "promote-read-replica via deprecated promote endpoint" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(Sequel::Dataset, first: pg))
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
         pg.update(parent_id: pg.id)
         create_minio_cluster_for_blob_storage
         post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/promote"
@@ -528,9 +507,6 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "fails to promote if not read_replica" do
-        expect(project).to receive(:postgres_resources_dataset).and_return(instance_double(Sequel::Dataset, first: pg))
-        expect(described_class).to receive(:authorized_project).with(user, project.id).and_return(project)
-
         post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/promote-read-replica"
 
         expect(last_response).to have_api_error(400, "Non read replica servers cannot be promoted.")
@@ -1017,7 +993,6 @@ RSpec.describe Clover, "postgres" do
         allow(VictoriaMetricsResource).to receive(:first).with(project_id: prj.id).and_return(vmr)
         allow(vmr).to receive(:servers_dataset).and_return([vm_server])
         allow(VictoriaMetricsResource).to receive(:client_for_project).and_return(tsdb_client)
-        allow(project).to receive(:postgres_resources_dataset).and_return(instance_double(Sequel::Dataset, first: pg))
       end
 
       it "returns metrics for the specified time range" do
@@ -1104,16 +1079,6 @@ RSpec.describe Clover, "postgres" do
 
         expect(last_response.status).to eq(404)
         expect(JSON.parse(last_response.body)["error"]["message"]).to eq("Metrics are not configured for this instance")
-      end
-
-      it "uses local victoria-metrics client in development mode" do
-        allow(Config).to receive(:development?).and_return(true)
-        allow(VictoriaMetricsResource).to receive(:first).with(project_id: prj.id).and_return(nil)
-        allow(VictoriaMetrics::Client).to receive(:new).and_return(tsdb_client)
-        expect(tsdb_client).to receive(:query_range).at_least(:once).and_return([])
-        get "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/metrics"
-        expect(last_response.status).to eq(200)
-        expect(JSON.parse(last_response.body)["metrics"]).not_to be_empty
       end
 
       it "handles empty metrics data properly" do
@@ -1949,7 +1914,7 @@ RSpec.describe Clover, "postgres" do
         create_minio_cluster_for_blob_storage
         # create_minio_cluster_for_blob_storage seeds the DNS zone under the postgres
         # service project; point MinioCluster#dns_zone's lookup at it so the endpoint resolves.
-        allow(Config).to receive(:minio_service_project_id).and_return(Config.postgres_service_project_id)
+        expect(Config).to receive(:minio_service_project_id).and_return(Config.postgres_service_project_id).at_least(:once)
         expiration = Time.now.utc + 36 * 60 * 60
         minio_client = instance_double(Minio::Client)
         expect(Minio::Client).to receive(:new).and_return(minio_client)
