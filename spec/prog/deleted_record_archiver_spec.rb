@@ -215,7 +215,7 @@ RSpec.describe Prog::DeletedRecordArchiver do
     end
 
     it "cuts the hour down when a shorter window is configured" do
-      allow(Config).to receive(:deleted_record_archive_window_seconds).and_return(15 * 60)
+      expect(Config).to receive(:deleted_record_archive_window_seconds).and_return(15 * 60).at_least(:once)
 
       expect { prog.archive }.to nap(1)
       expect { prog.archive }.to nap(1)
@@ -229,7 +229,7 @@ RSpec.describe Prog::DeletedRecordArchiver do
 
     it "picks up a window length that changed partway through a day" do
       expect { prog.archive }.to nap(1)
-      allow(Config).to receive(:deleted_record_archive_window_seconds).and_return(15 * 60)
+      expect(Config).to receive(:deleted_record_archive_window_seconds).and_return(15 * 60).at_least(:once)
       expect { prog.archive }.to nap(1)
 
       expect(uploads.map { it[:key] }).to eq [
