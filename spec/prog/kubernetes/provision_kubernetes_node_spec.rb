@@ -139,7 +139,7 @@ RSpec.describe Prog::Kubernetes::ProvisionKubernetesNode do
 
     it "records that the bundler install can be skipped when the node boots from a machine image" do
       metal = create_machine_image_version_metal(name: "kubernetes-#{Option.selectable_kubernetes_versions.first.tr(".", "_")}", set_latest_version: true)
-      allow(Config).to receive(:machine_images_service_project_id).and_return(metal.machine_image_version.machine_image.project_id)
+      expect(Config).to receive(:machine_images_service_project_id).and_return(metal.machine_image_version.machine_image.project_id).thrice
 
       expect { prog.create_node }.to hop("bootstrap_rhizome")
 
@@ -209,7 +209,7 @@ RSpec.describe Prog::Kubernetes::ProvisionKubernetesNode do
     it "enables kubelet, grants control plane operator access, and buds a bootstrap rhizome process" do
       prog.node.vm.strand.update(label: "wait")
       operator_key = "ssh-ed25519 AAAAoperator operator@ubicloud"
-      allow(Config).to receive(:operator_ssh_public_keys).and_return(operator_key)
+      expect(Config).to receive(:operator_ssh_public_keys).and_return(operator_key).twice
       sshable = prog.vm.sshable
       expect(sshable).to receive(:_cmd).with("sudo tee /etc/nftables.conf > /dev/null", stdin: expected_nft_rules).ordered
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now nftables").ordered
@@ -252,7 +252,7 @@ RSpec.describe Prog::Kubernetes::ProvisionKubernetesNode do
     it "does not grant operator access to worker nodes" do
       prog.node.vm.strand.update(label: "wait")
       refresh_frame(prog, new_values: {"nodepool_id" => kubernetes_nodepool.id})
-      allow(Config).to receive(:operator_ssh_public_keys).and_return("ssh-ed25519 AAAAoperator operator@ubicloud")
+      expect(Config).not_to receive(:operator_ssh_public_keys)
       sshable = prog.vm.sshable
       expect(sshable).to receive(:_cmd).with("sudo tee /etc/nftables.conf > /dev/null", stdin: expected_nft_rules).ordered
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now nftables").ordered
