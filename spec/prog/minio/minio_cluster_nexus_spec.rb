@@ -83,7 +83,7 @@ RSpec.describe Prog::Minio::MinioClusterNexus do
 
     it "skips root certificates and starts a CertNexus strand when using publicly signed certificates" do
       DnsZone.create(project_id: minio_project.id, name: Config.minio_host_name)
-      allow(Config).to receive_messages(acme_email: "test@ubicloud.com")
+      expect(Config).to receive_messages(acme_email: "test@ubicloud.com")
 
       described_class.assemble(minio_project.id, "minio2", Location::HETZNER_FSN1_ID, "minio-admin", 100, 1, 1, 1, "standard-2")
 
@@ -186,7 +186,7 @@ RSpec.describe Prog::Minio::MinioClusterNexus do
       # migration rather than a publicly assembled cluster.
       nx.minio_cluster
       DnsZone.create(project_id: minio_project.id, name: Config.minio_host_name)
-      allow(Config).to receive_messages(acme_email: "test@ubicloud.com")
+      expect(Config).to receive_messages(acme_email: "test@ubicloud.com")
 
       expect { nx.switch_to_public_certs }.to hop("wait_switch_to_public_certs")
       cert = Cert.with_pk!(nx.strand.stack[0]["current_cert_id"])
