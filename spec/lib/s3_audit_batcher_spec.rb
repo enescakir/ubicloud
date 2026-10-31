@@ -39,7 +39,7 @@ RSpec.describe S3AuditBatcher do
 
     it "increments the object sequence per successful batch" do
       keys = []
-      allow(client).to receive(:put_object) { |args| keys << args[:key] }
+      expect(client).to receive(:put_object) { |args| keys << args[:key] }.twice
 
       batcher.send_batch([{line: "a"}])
       batcher.send_batch([{line: "b"}])
@@ -57,8 +57,8 @@ RSpec.describe S3AuditBatcher do
     end
 
     it "exits the process when failures exceed the limit (fail-closed)" do
-      allow(client).to receive(:put_object).and_raise(StandardError, "boom")
-      allow(batcher).to receive(:puts)
+      expect(client).to receive(:put_object).and_raise(StandardError, "boom").exactly(5).times
+      expect(batcher).to receive(:puts).exactly(6).times
 
       4.times { batcher.send_batch([{line: "a"}]) }
       expect { batcher.send_batch([{line: "a"}]) }.to raise_error(SystemExit)
