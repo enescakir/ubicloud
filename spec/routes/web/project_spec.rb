@@ -341,10 +341,10 @@ RSpec.describe Clover, "project" do
         visit "#{project_wo_permissions.path}/dashboard"
 
         within "#desktop-menu" do
-          expect { click_link "Users" }.to raise_error Capybara::ElementNotFound
-          expect { click_link "Access Policy" }.to raise_error Capybara::ElementNotFound
-          expect { click_link "Billing" }.to raise_error Capybara::ElementNotFound
-          expect { click_link "Settings" }.to raise_error Capybara::ElementNotFound
+          expect(page).to have_no_link "Users"
+          expect(page).to have_no_link "Access Policy"
+          expect(page).to have_no_link "Billing"
+          expect(page).to have_no_link "Settings"
         end
       end
 
@@ -470,7 +470,7 @@ RSpec.describe Clover, "project" do
       it "can not update the project name when does not have permissions" do
         visit project_wo_permissions.path
 
-        expect { click_button "Save" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_button "Save"
       end
     end
 
@@ -752,7 +752,7 @@ RSpec.describe Clover, "project" do
 
         visit "#{project.path}/user"
         expect(page).to have_no_content invited_email
-        expect { find "#invitation-#{invited_email.gsub(/\W+/, "")} .delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css "#invitation-#{invited_email.gsub(/\W+/, "")} .delete-btn"
       end
 
       it "requires Project:user permissions to update default policy of invited user, and SubjectTag:add for access to subject tag" do
@@ -1278,7 +1278,7 @@ RSpec.describe Clover, "project" do
         visit project_wo_permissions.path
         expect(page.title).to eq "Ubicloud - project-2"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
     end
   end
