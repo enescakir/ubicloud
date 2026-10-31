@@ -185,7 +185,7 @@ RSpec.describe Prog::Ai::InferenceEndpointNexus do
     end
 
     it "destroys the inference_endpoint" do
-      allow(nx).to receive(:replicas).and_return([])
+      expect(nx).to receive(:replicas).and_return([])
       expect(inference_endpoint).to receive(:destroy)
       expect { nx.self_destroy }.to exit({"msg" => "inference endpoint is deleted"})
     end
@@ -193,14 +193,14 @@ RSpec.describe Prog::Ai::InferenceEndpointNexus do
 
   describe "#reconcile_replicas" do
     it "assembles new replicas if actual count is less than desired" do
-      allow(inference_endpoint).to receive(:replica_count).and_return(3)
+      expect(inference_endpoint).to receive(:replica_count).and_return(3)
       expect(replicas).to all(receive(:destroy_set?).and_return(false))
       expect(Prog::Ai::InferenceEndpointReplicaNexus).to receive(:assemble).with(inference_endpoint.id)
       nx.reconcile_replicas
     end
 
     it "destroys older excess replicas if actual count is more than desired" do
-      allow(inference_endpoint).to receive(:replica_count).and_return(1)
+      expect(inference_endpoint).to receive(:replica_count).and_return(1)
       expect(replicas).to all(receive(:destroy_set?).at_least(:once).and_return(false))
       expect(replicas[0]).to receive(:created_at).and_return(Time.now)
       expect(replicas[1]).to receive(:created_at).and_return(Time.now + 1)
@@ -210,7 +210,7 @@ RSpec.describe Prog::Ai::InferenceEndpointNexus do
     end
 
     it "destroys excess replicas not in wait if actual count is more than desired" do
-      allow(inference_endpoint).to receive(:replica_count).and_return(1)
+      expect(inference_endpoint).to receive(:replica_count).and_return(1)
       expect(replicas).to all(receive(:destroy_set?).at_least(:once).and_return(false))
       expect(replicas[0]).to receive(:strand).and_return(instance_double(Strand, label: "start")).at_least(:once)
       expect(replicas[0]).to receive(:created_at).and_return(Time.now + 1)
@@ -221,7 +221,7 @@ RSpec.describe Prog::Ai::InferenceEndpointNexus do
     end
 
     it "does nothing if actual equals to desired replica count" do
-      allow(inference_endpoint).to receive(:replica_count).and_return(2)
+      expect(inference_endpoint).to receive(:replica_count).and_return(2)
       expect(replicas).to all(receive(:destroy_set?).at_least(:once).and_return(false))
       expect(replicas).not_to include(receive(:incr_destroy))
       nx.reconcile_replicas
