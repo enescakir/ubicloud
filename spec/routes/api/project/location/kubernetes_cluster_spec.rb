@@ -61,7 +61,7 @@ RSpec.describe Clover, "kubernetes-cluster" do
       let(:tsdb_client) { instance_double(VictoriaMetrics::Client) }
 
       it "queries every kubernetes metric against the cluster ubid" do
-        allow(VictoriaMetricsResource).to receive(:client_for_project).with(k8s_project.id).and_return(tsdb_client)
+        expect(VictoriaMetricsResource).to receive(:client_for_project).with(k8s_project.id).and_return(tsdb_client)
         queries = []
         expect(tsdb_client).to receive(:query_range).exactly(Metrics::KUBERNETES_METRICS.values.sum { it.series.count }).times do |query:, **|
           queries << query
@@ -76,7 +76,7 @@ RSpec.describe Clover, "kubernetes-cluster" do
       end
 
       it "returns 404 when no victoria metrics resource is configured" do
-        allow(VictoriaMetricsResource).to receive(:client_for_project).with(k8s_project.id).and_return(nil)
+        expect(VictoriaMetricsResource).to receive(:client_for_project).with(k8s_project.id).and_return(nil)
 
         get "/project/#{project.ubid}/location/#{kc.display_location}/kubernetes-cluster/#{kc.name}/metrics"
 
@@ -84,7 +84,7 @@ RSpec.describe Clover, "kubernetes-cluster" do
       end
 
       it "fails when the metric name is invalid" do
-        allow(VictoriaMetricsResource).to receive(:client_for_project).with(k8s_project.id).and_return(tsdb_client)
+        expect(VictoriaMetricsResource).to receive(:client_for_project).with(k8s_project.id).and_return(tsdb_client)
 
         get "/project/#{project.ubid}/location/#{kc.display_location}/kubernetes-cluster/#{kc.name}/metrics?key=nope"
 
