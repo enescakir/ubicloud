@@ -387,7 +387,7 @@ RSpec.describe Project do
   describe ".service_project?" do
     it "is true for the id of any configured service project" do
       p = described_class.create(name: "svc")
-      allow(Config).to receive(:kubernetes_service_project_id).and_return(p.id)
+      expect(Config).to receive(:kubernetes_service_project_id).and_return(p.id)
       expect(described_class.service_project?(p.id)).to be true
     end
 
