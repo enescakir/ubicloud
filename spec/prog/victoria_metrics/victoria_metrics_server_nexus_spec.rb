@@ -380,7 +380,7 @@ RSpec.describe Prog::VictoriaMetrics::VictoriaMetricsServerNexus do
     end
 
     it "adds IP SAN if running in development or E2E environment" do
-      allow(Config).to receive(:development?).and_return(true)
+      expect(Config).to receive(:development?).and_return(true)
       add_ipv4_to_vm(nx.vm, "1.1.1.1")
       nx.vm.update(ephemeral_net6: "2a01:4f8:10a:128b:814c::/79")
 
