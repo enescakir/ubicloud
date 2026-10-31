@@ -156,7 +156,7 @@ RSpec.describe Clover do
         },
       },
     ).and_raise(RuntimeError.new("paging failure"))
-    allow(Clog).to receive(:emit).and_call_original
+    expect(Clog).to receive(:emit).and_call_original
     expect(Clog).to receive(:emit).with("failed to page for unexpected error", instance_of(Hash)).and_call_original
 
     visit "/webhook/test-error"
