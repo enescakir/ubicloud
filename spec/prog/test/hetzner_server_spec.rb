@@ -284,7 +284,7 @@ RSpec.describe Prog::Test::HetznerServer do
 
   describe "#hetzner_api" do
     it "can create a HetznerApis instance" do
-      allow(hs_test).to receive(:hetzner_api).and_call_original
+      expect(hs_test).to receive(:hetzner_api).and_call_original
       expect(hs_test.hetzner_api).not_to be_nil
     end
   end
