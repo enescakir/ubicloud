@@ -670,7 +670,7 @@ RSpec.describe Clover, "firewall" do
         visit "#{project_wo_permissions.path}#{fw_wo_permission.path}/settings"
         expect(page.title).to eq "Ubicloud - dummy-fw-2"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
     end
   end
