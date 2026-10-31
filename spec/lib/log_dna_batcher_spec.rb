@@ -37,8 +37,8 @@ RSpec.describe LogDnaBatcher do
       end
 
       it "exits when failures exceed the allowed limit" do
-        allow(http).to receive(:request).and_return(Net::HTTPBadRequest.new(nil, 400, "Bad Request"))
-        allow(log_dna_batcher).to receive(:puts)
+        expect(http).to receive(:request).and_return(Net::HTTPBadRequest.new(nil, 400, "Bad Request")).exactly(5).times
+        expect(log_dna_batcher).to receive(:puts).exactly(6).times
 
         4.times { log_dna_batcher.send_batch(["test log"]) }
         expect { log_dna_batcher.send_batch(["test log"]) }.to raise_error(SystemExit)
