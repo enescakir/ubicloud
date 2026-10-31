@@ -12,14 +12,12 @@ RSpec.describe Vm do
       v
     }
 
-    it "returns deleting if destroy semaphore increased" do
+    it "returns deleting if destroy or destroying semaphore increased" do
       vm.incr_destroy
       expect(vm.display_state).to eq("deleting")
-    end
-
-    it "returns deleting if destroying semaphore increased" do
+      vm.decr_destroy
       vm.incr_destroying
-      expect(vm.display_state).to eq("deleting")
+      expect(vm.reload.display_state).to eq("deleting")
     end
 
     it "returns restarting if restart semaphore increased" do
@@ -37,14 +35,12 @@ RSpec.describe Vm do
       expect(vm.display_state).to eq("starting")
     end
 
-    it "returns stopping if stop semaphore increased" do
+    it "returns stopping if stop or stopping semaphore increased" do
       vm.incr_stop
       expect(vm.display_state).to eq("stopping")
-    end
-
-    it "returns stopping if stopping semaphore increased" do
+      vm.decr_stop
       vm.incr_stopping
-      expect(vm.display_state).to eq("stopping")
+      expect(vm.reload.display_state).to eq("stopping")
     end
 
     it "returns stopped if at stopped label" do
@@ -97,16 +93,18 @@ RSpec.describe Vm do
   end
 
   describe "#cloud_hypervisor_cpu_topology" do
-    it "scales a single-socket hyperthreaded system" do
-      vmh = create_vm_host(total_cpus: 12, total_cores: 6, total_dies: 1, total_sockets: 1)
-      vm = create_vm(vm_host_id: vmh.id, family: "standard", vcpus: 4)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("2:2:1:1")
-    end
-
-    it "scales a dual-socket hyperthreaded system" do
-      vmh = create_vm_host(total_cpus: 24, total_cores: 12, total_dies: 2, total_sockets: 2)
-      vm = create_vm(vm_host_id: vmh.id, family: "standard", vcpus: 4)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("2:2:1:1")
+    it "scales single and dual socket, hyperthreaded and non-hyperthreaded systems for standard and burstable families" do
+      # [total_cpus, total_cores, total_dies, total_sockets] => {[family, vcpus] => topology}
+      expected = {
+        [12, 6, 1, 1] => {["standard", 4] => "2:2:1:1", ["burstable", 2] => "2:1:1:1", ["burstable", 1] => "1:1:1:1"},
+        [24, 12, 2, 2] => {["standard", 4] => "2:2:1:1", ["burstable", 1] => "1:1:1:1"},
+        [12, 12, 1, 1] => {["standard", 4] => "1:4:1:1", ["burstable", 2] => "1:2:1:1", ["burstable", 1] => "1:1:1:1"},
+      }
+      topologies = expected.to_h do |(total_cpus, total_cores, total_dies, total_sockets), sizes|
+        vmh = create_vm_host(total_cpus:, total_cores:, total_dies:, total_sockets:)
+        [[total_cpus, total_cores, total_dies, total_sockets], sizes.to_h { |(family, vcpus), _| [[family, vcpus], create_vm(vm_host_id: vmh.id, family:, vcpus:).cloud_hypervisor_cpu_topology.to_s] }]
+      end
+      expect(topologies).to eq(expected)
     end
 
     it "scales the b300 sizes on B300 hosts with a die per package or per CCD" do
@@ -145,42 +143,6 @@ RSpec.describe Vm do
       vmh = create_vm_host(total_cpus: 12, total_cores: 6, total_dies: 1, total_sockets: 1)
       vm = create_vm(vm_host_id: vmh.id, family: "burstable", vcpus: 5)
       expect { vm.cloud_hypervisor_cpu_topology }.to raise_error RuntimeError, "BUG: need uniform number of cores allocated per die"
-    end
-
-    it "scales a single-socket non-hyperthreaded system" do
-      vmh = create_vm_host(total_cpus: 12, total_cores: 12, total_dies: 1, total_sockets: 1)
-      vm = create_vm(vm_host_id: vmh.id, family: "standard", vcpus: 4)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("1:4:1:1")
-    end
-
-    it "scales a single-socket hyperthreaded system for burstable family for 2 vcpus" do
-      vmh = create_vm_host(total_cpus: 12, total_cores: 6, total_dies: 1, total_sockets: 1)
-      vm = create_vm(vm_host_id: vmh.id, family: "burstable", vcpus: 2)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("2:1:1:1")
-    end
-
-    it "scales a single-socket non-hyperthreaded system for burstable family for 2 vcpus" do
-      vmh = create_vm_host(total_cpus: 12, total_cores: 12, total_dies: 1, total_sockets: 1)
-      vm = create_vm(vm_host_id: vmh.id, family: "burstable", vcpus: 2)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("1:2:1:1")
-    end
-
-    it "scales a single-socket hyperthreaded system for burstable family for 1 vcpu" do
-      vmh = create_vm_host(total_cpus: 12, total_cores: 6, total_dies: 1, total_sockets: 1)
-      vm = create_vm(vm_host_id: vmh.id, family: "burstable", vcpus: 1)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("1:1:1:1")
-    end
-
-    it "scales a double-socket hyperthreaded system for burstable family for 1 vcpu" do
-      vmh = create_vm_host(total_cpus: 24, total_cores: 12, total_dies: 2, total_sockets: 2)
-      vm = create_vm(vm_host_id: vmh.id, family: "burstable", vcpus: 1)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("1:1:1:1")
-    end
-
-    it "scales a single-socket non-hyperthreaded system for burstable family for 1 vcpu" do
-      vmh = create_vm_host(total_cpus: 12, total_cores: 12, total_dies: 1, total_sockets: 1)
-      vm = create_vm(vm_host_id: vmh.id, family: "burstable", vcpus: 1)
-      expect(vm.cloud_hypervisor_cpu_topology.to_s).to eq("1:1:1:1")
     end
   end
 
@@ -710,7 +672,8 @@ RSpec.describe Vm do
     it "validates maintenance_window_start_at" do
       expect { vm.update(maintenance_window_start_at: 24) }.to raise_error(Sequel::ValidationFailed, /maintenance_window_start_at must be between 0 and 23/)
       expect { vm.update(maintenance_window_start_at: -1) }.to raise_error(Sequel::ValidationFailed, /maintenance_window_start_at must be between 0 and 23/)
-      expect { vm.update(maintenance_window_start_at: 9) }.not_to raise_error
+      vm.update(maintenance_window_start_at: 9)
+      expect(vm.reload.maintenance_window_start_at).to eq(9)
     end
 
     it "returns in_maintenance_window? correctly" do
