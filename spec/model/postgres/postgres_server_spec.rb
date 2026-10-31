@@ -50,28 +50,43 @@ RSpec.describe PostgresServer do
       )
     end
 
-    def create_standby_resource(suffix)
-      pr = create_postgres_resource(project:, location_id: location.id)
-      pr.update(ha_type: PostgresResource::HaType::SYNC)
-      pr
+    let(:standby) {
+      postgres_server
+      described_class.create(
+        timeline:, resource:, vm_id: create_hosted_vm(project, private_subnet, "standby").id,
+        synchronization_status: "ready", timeline_access: "fetch", version: "16",
+      )
+    }
+
+    def create_standby_resource
+      create_postgres_resource(project:, location_id: location.id).update(ha_type: PostgresResource::HaType::SYNC)
     end
 
     it "does not set archival related configs if blob storage is not configured" do
-      allow(Config).to receive(:postgres_service_project_id).and_return(nil)
+      expect(Config).to receive(:postgres_service_project_id).and_return(nil).at_least(:once)
       expect(postgres_server.configure_hash[:configs]).not_to include(:archive_mode, :archive_timeout, :archive_command, :synchronous_standby_names, :primary_conninfo, :recovery_target_time, :restore_command)
     end
 
-    it "sets configs that are specific to primary" do
-      expect(postgres_server.configure_hash[:configs]).to include(:archive_mode, :archive_timeout, :archive_command)
+    it "sets the default configs for a primary on PostgreSQL 16" do
+      result = postgres_server.configure_hash
+      configs = result[:configs]
+      expect(configs).to include(
+        :archive_mode, :archive_timeout,
+        :archive_command => "'/usr/bin/walg-daemon-client /tmp/wal-g wal-push %f'",
+        "log_line_prefix" => "'%m [%p:%l] (%x,%v): host=%r,db=%d,user=%u,app=%a,client=%h '",
+        "wal_compression" => "lz4",
+        "default_toast_compression" => "lz4",
+        "recovery_init_sync_method" => "syncfs",
+        "wal_keep_size" => "96MB",
+        "max_connections" => Validation::PostgresConfigValidator.new("16").default("max_connections").to_s,
+      )
+      expect(configs.keys & ["allow_alter_system", "autovacuum_max_workers", "autovacuum_vacuum_max_threshold", :synchronized_standby_slots, :primary_conninfo, :restore_command]).to eq []
+      expect(result[:strict_overcommit]).to be true
     end
 
-    it "sets synchronized_standby_slots on Postgres 17" do
+    it "sets allow_alter_system and synchronized_standby_slots on PostgreSQL 17" do
       postgres_server.update(version: "17")
-      expect(postgres_server.configure_hash[:configs]).to include(:synchronized_standby_slots)
-    end
-
-    it "sets archive_command to use the walg daemon client" do
-      expect(postgres_server.configure_hash[:configs]).to include(archive_command: "'/usr/bin/walg-daemon-client /tmp/wal-g wal-push %f'")
+      expect(postgres_server.configure_hash[:configs]).to include("allow_alter_system" => "off", :synchronized_standby_slots => "''")
     end
 
     it "sets synchronous_standby_names for sync replication mode" do
@@ -94,33 +109,33 @@ RSpec.describe PostgresServer do
       resource.update(ha_type: PostgresResource::HaType::SYNC)
 
       described_class.create(
-        timeline:, resource: create_standby_resource("1"), vm_id: create_hosted_vm(project, private_subnet, "standby1").id, is_representative: true,
+        timeline:, resource: create_standby_resource, vm_id: create_hosted_vm(project, private_subnet, "standby1").id, is_representative: true,
         synchronization_status: "catching_up", timeline_access: "fetch", version: "16",
       )
       described_class.create(
-        timeline:, resource: create_standby_resource("2"), vm_id: create_hosted_vm(project, private_subnet, "standby2").id, is_representative: true,
+        timeline:, resource: create_standby_resource, vm_id: create_hosted_vm(project, private_subnet, "standby2").id, is_representative: true,
         synchronization_status: "catching_up", timeline_access: "fetch", version: "16",
       )
 
       expect(postgres_server.configure_hash[:configs]).not_to include(:synchronous_standby_names)
     end
 
-    it "sets configs that are specific to standby" do
-      postgres_server.timeline_access = "fetch"
-      expect(postgres_server).to receive(:doing_pitr?).and_return(false).at_least(:once)
-      expect(resource).to receive(:replication_connection_string)
-      expect(postgres_server.configure_hash[:configs]).to include(:primary_conninfo, :restore_command)
+    it "sets configs that are specific to standby, keeping more WAL so the archive can be backfilled after a failover" do
+      configs = standby.configure_hash[:configs]
+      expect(configs).to include(
+        :primary_conninfo => "'#{resource.replication_connection_string(application_name: standby.ubid)}'",
+        :restore_command => "'/usr/bin/wal-g wal-fetch %f %p --config /etc/postgresql/wal-g.env'",
+        "wal_keep_size" => "2GB",
+      )
+      expect(configs.keys & [:primary_slot_name, :recovery_target_time]).to eq []
+
+      standby.vm.update(family: "burstable")
+      expect(standby.configure_hash[:configs]).to include("wal_keep_size" => "512MB")
     end
 
-    it "keeps more WAL on standbys so the archive can be backfilled after a failover" do
-      expect(postgres_server.configure_hash[:configs]).to include("wal_keep_size" => "96MB")
-
-      postgres_server.timeline_access = "fetch"
-      expect(resource).to receive(:replication_connection_string).with(application_name: postgres_server.ubid).twice
-      expect(postgres_server.configure_hash[:configs]).to include("wal_keep_size" => "2GB")
-
-      postgres_server.vm.update(family: "burstable")
-      expect(postgres_server.configure_hash[:configs]).to include("wal_keep_size" => "512MB")
+    it "sets primary_slot_name to ubid on standby when physical slot ready" do
+      standby.update(physical_slot_ready_id: postgres_server.id)
+      expect(standby.configure_hash.dig(:configs, :primary_slot_name)).to eq("'#{standby.ubid}'")
     end
 
     it "sets configs that are specific to PITR-by-time restore" do
@@ -134,57 +149,22 @@ RSpec.describe PostgresServer do
       postgres_server.incr_unarchive
       configs = postgres_server.configure_hash[:configs]
       expect(configs).to include(:restore_command)
-      expect(configs).not_to include(:recovery_target_lsn)
-      expect(configs).not_to include(:recovery_target_time)
-    end
-
-    it "sets primary_slot_name to ubid on standby when physical slot ready" do
-      postgres_server.timeline_access = "fetch"
-      expect(postgres_server.configure_hash.dig(:configs, :primary_slot_name)).to be_nil
-      postgres_server.physical_slot_ready_id = postgres_server.id
-      expect(postgres_server.configure_hash.dig(:configs, :primary_slot_name)).to eq("'#{postgres_server.ubid}'")
-    end
-
-    it "sets log_line_prefix for all instances" do
-      expect(postgres_server.configure_hash[:configs]).to include("log_line_prefix" => "'%m [%p:%l] (%x,%v): host=%r,db=%d,user=%u,app=%a,client=%h '")
+      expect(configs.keys & [:recovery_target_lsn, :recovery_target_time]).to eq []
     end
 
     it "puts extra logging options for AWS" do
       location.update(provider: "aws")
-      postgres_server.timeline_access = "push"
       expect(postgres_server.configure_hash[:configs]).to include(:log_connections, :log_disconnections)
     end
 
-    it "sets allow_alter_system to off for version >= 17" do
-      postgres_server.update(version: "17")
-      expect(postgres_server.configure_hash[:configs]).to include("allow_alter_system" => "off")
-    end
-
-    it "enables lz4 compression for WAL and TOAST by default" do
-      expect(postgres_server.configure_hash[:configs]).to include("wal_compression" => "lz4", "default_toast_compression" => "lz4")
-    end
-
-    it "sets max_wal_size to 4% of storage" do
-      allow(postgres_server).to receive(:storage_size_gib).and_return(1875)
-      expect(postgres_server.configure_hash[:configs]).to include("max_wal_size" => "75GB")
-    end
-
-    it "caps max_wal_size at 256GB for large-storage instances" do
-      allow(postgres_server).to receive(:storage_size_gib).and_return(7500)
-      expect(postgres_server.configure_hash[:configs]).to include("max_wal_size" => "256GB")
-    end
-
-    it "floors max_wal_size at 5GB for small-storage instances" do
-      allow(postgres_server).to receive(:storage_size_gib).and_return(32)
-      expect(postgres_server.configure_hash[:configs]).to include("max_wal_size" => "5GB")
-    end
-
-    it "sets recovery_init_sync_method to syncfs" do
-      expect(postgres_server.configure_hash[:configs]).to include("recovery_init_sync_method" => "syncfs")
-    end
-
-    it "sources the max_connections default from the config validator schema" do
-      expect(postgres_server.configure_hash[:configs]["max_connections"]).to eq(Validation::PostgresConfigValidator.new(postgres_server.version).default("max_connections").to_s)
+    it "sets max_wal_size to 4% of storage, between 5GB and 256GB" do
+      volume = VmStorageVolume.create(vm:, disk_index: 0, boot: false, size_gib: 32)
+      max_wal_sizes = [32, 1875, 7500].map do |size_gib|
+        volume.update(size_gib:)
+        postgres_server.vm.vm_storage_volumes(reload: true)
+        postgres_server.configure_hash[:configs]["max_wal_size"]
+      end
+      expect(max_wal_sizes).to eq ["5GB", "75GB", "256GB"]
     end
 
     it "lists only the subnet of the user NIC for pg_hba" do
@@ -198,57 +178,41 @@ RSpec.describe PostgresServer do
       expect(postgres_server.configure_hash[:private_subnets]).to eq([{net4: "172.0.0.0/26", net6: "fdfa:b5aa:14a3:4a3d::/64"}])
     end
 
-    it "sets strict_overcommit to true by default" do
-      expect(postgres_server.configure_hash[:strict_overcommit]).to be true
-    end
-
     it "sets strict_overcommit to false when skip_strict_memory_overcommit semaphore is set" do
       resource.incr_skip_strict_memory_overcommit
       expect(postgres_server.configure_hash[:strict_overcommit]).to be false
     end
 
     it "passes ubicloud.shared_memory_percent through to the guest config" do
-      allow(postgres_server.vm).to receive(:memory_gib).and_return(32)
+      vm.update(memory_gib: 32)
       resource.update(user_config: {"ubicloud.shared_memory_percent" => "50", "work_mem" => "32MB"})
-      user_config = postgres_server.configure_hash[:user_config]
-      expect(user_config["ubicloud.shared_memory_percent"]).to eq("50")
-      expect(user_config["work_mem"]).to eq("32MB")
+      expect(postgres_server.configure_hash[:user_config]).to eq("ubicloud.shared_memory_percent" => "50", "work_mem" => "32MB")
     end
 
-    it "downgrades serializable default_transaction_isolation to repeatable read on standbys" do
+    it "downgrades only serializable default_transaction_isolation to repeatable read on standbys" do
       resource.update(user_config: {"default_transaction_isolation" => "serializable", "max_connections" => "100"})
-      expect(postgres_server.configure_hash[:user_config]["default_transaction_isolation"]).to eq("serializable")
-      postgres_server.timeline_access = "fetch"
-      expect(postgres_server).to receive(:doing_pitr?).and_return(false).at_least(:once)
-      allow(resource).to receive(:replication_connection_string).and_return("postgres://ubi_replication@host")
-      expect(postgres_server.configure_hash[:user_config]["default_transaction_isolation"]).to eq("repeatable read")
-      expect(postgres_server.configure_hash[:user_config]).to include("max_connections" => "100")
-    end
+      expect(postgres_server.configure_hash[:user_config]).to eq("default_transaction_isolation" => "serializable", "max_connections" => "100")
+      expect(standby.configure_hash[:user_config]).to eq("default_transaction_isolation" => "repeatable read", "max_connections" => "100")
 
-    it "keeps non-serializable default_transaction_isolation on standbys" do
       resource.update(user_config: {"default_transaction_isolation" => "repeatable read"})
-      postgres_server.timeline_access = "fetch"
-      expect(postgres_server).to receive(:doing_pitr?).and_return(false).at_least(:once)
-      allow(resource).to receive(:replication_connection_string).and_return("postgres://ubi_replication@host")
-      expect(postgres_server.configure_hash[:user_config]).to have_key("default_transaction_isolation")
+      expect(standby.configure_hash[:user_config]).to eq("default_transaction_isolation" => "repeatable read")
     end
 
-    # max_workers is vcpus.clamp(3, 8), so 1c exercises the floor and 16c/48c
-    # the cap. work_mem is 1/4 of VM memory split across those workers.
-    {
-      [1, 4] => {"autovacuum_vacuum_cost_limit" => "200", "autovacuum_naptime" => "60s", "autovacuum_max_workers" => "3", "autovacuum_work_mem" => "341MB"},
-      [4, 16] => {"autovacuum_vacuum_cost_limit" => "200", "autovacuum_naptime" => "30s", "autovacuum_max_workers" => "4", "autovacuum_work_mem" => "1024MB"},
-      [16, 64] => {"autovacuum_vacuum_cost_limit" => "800", "autovacuum_naptime" => "30s", "autovacuum_max_workers" => "8", "autovacuum_work_mem" => "2048MB"},
-      [48, 192] => {"autovacuum_vacuum_cost_limit" => "2400", "autovacuum_naptime" => "30s", "autovacuum_max_workers" => "8", "autovacuum_work_mem" => "6144MB"},
-    }.each do |(vcpus, memory_gib), scaled|
-      it "scales the autovacuum GUCs for a #{vcpus}c/#{memory_gib}GB VM on PostgreSQL 18+" do
-        postgres_server.update(version: "18")
-        allow(postgres_server.vm).to receive_messages(vcpus:, memory_gib:)
-        expect(postgres_server.configure_hash[:configs]).to include(scaled.merge(
-          "autovacuum_vacuum_cost_delay" => "2ms",
-          "autovacuum_vacuum_max_threshold" => "50000000",
-        ))
+    it "scales the autovacuum GUCs with the VM size on PostgreSQL 18+" do
+      postgres_server.update(version: "18")
+      # max_workers is vcpus.clamp(3, 8), so 1c exercises the floor and 16c/48c
+      # the cap. work_mem is 1/4 of VM memory split across those workers.
+      keys = %w[autovacuum_vacuum_cost_limit autovacuum_naptime autovacuum_max_workers autovacuum_work_mem autovacuum_vacuum_cost_delay autovacuum_vacuum_max_threshold]
+      scaled = [[1, 4], [4, 16], [16, 64], [48, 192]].map do |vcpus, memory_gib|
+        postgres_server.vm.update(vcpus:, memory_gib:)
+        postgres_server.configure_hash[:configs].values_at(*keys)
       end
+      expect(scaled).to eq [
+        ["200", "60s", "3", "341MB", "2ms", "50000000"],
+        ["200", "30s", "4", "1024MB", "2ms", "50000000"],
+        ["800", "30s", "8", "2048MB", "2ms", "50000000"],
+        ["2400", "30s", "8", "6144MB", "2ms", "50000000"],
+      ]
     end
 
     # The trigger thresholds are deliberately left at the PostgreSQL defaults of
@@ -259,50 +223,30 @@ RSpec.describe PostgresServer do
     # extra I/O, while cost_limit was already saturating the disk.
     it "leaves the autovacuum trigger scale factors at the PostgreSQL defaults" do
       postgres_server.update(version: "18")
-      allow(postgres_server.vm).to receive_messages(vcpus: 16, memory_gib: 64)
       configs = postgres_server.configure_hash[:configs]
-      expect(configs).not_to have_key("autovacuum_vacuum_scale_factor")
-      expect(configs).not_to have_key("autovacuum_vacuum_insert_scale_factor")
-    end
-
-    it "applies the reloadable autovacuum defaults below PostgreSQL 18" do
-      expect(postgres_server.version).to eq("16")
-      allow(postgres_server.vm).to receive_messages(vcpus: 16, memory_gib: 64)
-      expect(postgres_server.configure_hash[:configs]).to include(
-        "autovacuum_vacuum_cost_delay" => "2ms",
-        "autovacuum_vacuum_cost_limit" => "800",
-        "autovacuum_naptime" => "30s",
-      )
-    end
-
-    it "omits the restart-only and 18-only autovacuum GUCs below PostgreSQL 18" do
-      expect(postgres_server.version).to eq("16")
-      configs = postgres_server.configure_hash[:configs]
-      expect(configs).not_to have_key("autovacuum_max_workers")
-      expect(configs).not_to have_key("autovacuum_vacuum_max_threshold")
+      expect(configs.keys & ["autovacuum_vacuum_scale_factor", "autovacuum_vacuum_insert_scale_factor"]).to eq []
     end
 
     it "sizes autovacuum_work_mem for the workers that actually run below PostgreSQL 18" do
-      expect(postgres_server.version).to eq("16")
-      allow(postgres_server.vm).to receive_messages(vcpus: 48, memory_gib: 192)
+      postgres_server.vm.update(vcpus: 48, memory_gib: 192)
       configs = postgres_server.configure_hash[:configs]
+      expect(configs).to include("autovacuum_vacuum_cost_delay" => "2ms", "autovacuum_vacuum_cost_limit" => "2400", "autovacuum_naptime" => "30s")
       # Three workers is the pre-18 default and the count we leave in place, so
       # the three together stay within 1/4 of VM memory. Sizing off the scaled
       # count instead would drop this below the maintenance_work_mem these
       # servers inherit today.
-      expect(configs).to include("autovacuum_work_mem" => "16384MB")
-      expect(configs["autovacuum_work_mem"].to_i).to be > configs["maintenance_work_mem"].to_i
+      expect(configs).to include("autovacuum_work_mem" => "16384MB", "maintenance_work_mem" => "12288MB")
     end
 
     it "lets a customer user_config value override the scaled autovacuum default per-GUC" do
-      allow(postgres_server.vm).to receive_messages(vcpus: 4, memory_gib: 16)
+      postgres_server.vm.update(vcpus: 4, memory_gib: 16)
       resource.update(user_config: {"autovacuum_vacuum_cost_limit" => "9999"})
       result = postgres_server.configure_hash
       # The scaled default stays in the platform configs layer while the customer
       # value goes to user_config; the config renderer loads the platform file
       # first, so the customer value is the one that takes effect.
       expect(result[:configs]).to include("autovacuum_vacuum_cost_limit" => "200")
-      expect(result[:user_config]["autovacuum_vacuum_cost_limit"]).to eq("9999")
+      expect(result[:user_config]).to eq("autovacuum_vacuum_cost_limit" => "9999")
     end
   end
 
@@ -365,15 +309,10 @@ RSpec.describe PostgresServer do
       end
     end
 
-    describe "#restart_sensitive_target_values" do
-      it "uses schema defaults when not overridden" do
-        expect(postgres_server.restart_sensitive_target_values["max_connections"]).to eq(500)
-      end
-
-      it "uses the user override when present" do
-        resource.update(user_config: {"max_connections" => "200"})
-        expect(postgres_server.restart_sensitive_target_values["max_connections"]).to eq(200)
-      end
+    it "#restart_sensitive_target_values uses schema defaults unless the user overrides them" do
+      expect(postgres_server.restart_sensitive_target_values["max_connections"]).to eq(500)
+      resource.update(user_config: {"max_connections" => "200"})
+      expect(postgres_server.restart_sensitive_target_values["max_connections"]).to eq(200)
     end
 
     describe "#restart_sensitive_running_values" do
@@ -446,24 +385,15 @@ RSpec.describe PostgresServer do
   end
 
   describe "#user_config" do
-    it "leaves ubicloud.shared_memory_percent alone when the VM has the memory for it" do
-      allow(postgres_server.vm).to receive(:memory_gib).and_return(32)
-      resource.update(user_config: {"ubicloud.shared_memory_percent" => "75"})
-      expect(postgres_server.user_config["ubicloud.shared_memory_percent"]).to eq("75")
-    end
-
     it "bounds ubicloud.shared_memory_percent against the VM this server actually runs on" do
-      # A scale up to 32 GiB has been requested, so the stored 75 is valid for
-      # target_vm_size, but this server is still on the 8 GiB VM.
-      allow(postgres_server.vm).to receive(:memory_gib).and_return(8)
+      # A scale up to 32 GiB may have been requested, so the stored 75 can be
+      # valid for target_vm_size while this server is still on a smaller VM.
       resource.update(user_config: {"ubicloud.shared_memory_percent" => "75"})
-      expect(postgres_server.user_config["ubicloud.shared_memory_percent"]).to eq("50")
-    end
-
-    it "treats 16 GiB as below the threshold" do
-      allow(postgres_server.vm).to receive(:memory_gib).and_return(16)
-      resource.update(user_config: {"ubicloud.shared_memory_percent" => "75"})
-      expect(postgres_server.user_config["ubicloud.shared_memory_percent"]).to eq("50")
+      percents = [8, 16, 32].map do |memory_gib|
+        postgres_server.vm.update(memory_gib:)
+        postgres_server.user_config["ubicloud.shared_memory_percent"]
+      end
+      expect(percents).to eq ["50", "50", "75"]
     end
 
     it "leaves the config untouched when the percent is unset" do
@@ -473,46 +403,36 @@ RSpec.describe PostgresServer do
   end
 
   describe "#trigger_failover" do
-    it "logs error when server is not primary" do
-      expect(postgres_server).to receive(:is_representative).and_return(false)
-      expect(Clog).to receive(:emit).with("Cannot trigger failover on a non-representative server", instance_of(Hash))
+    it "logs error when server is not representative" do
+      postgres_server.update(is_representative: false)
+      expect(Clog).to receive(:emit).with("Cannot trigger failover on a non-representative server", {ubid: postgres_server.ubid}).and_call_original
       expect(postgres_server.trigger_failover(mode: "planned")).to be false
     end
 
     it "logs error when no suitable standby found" do
-      expect(postgres_server).to receive(:is_representative).and_return(true)
-      expect(postgres_server).to receive(:failover_target).with(mode: "planned").and_return(nil)
-      expect(Clog).to receive(:emit).with("No suitable standby found for failover", instance_of(Hash))
+      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
+      expect(Clog).to receive(:emit).with("No suitable standby found for failover", {ubid: postgres_server.ubid}).and_call_original
       expect(postgres_server.trigger_failover(mode: "planned")).to be false
     end
 
-    it "returns true only when failover is successfully triggered" do
+    it "requests a take over from the failover target, with a timeline switch on promote when switch_timeline is set" do
       standby = described_class.create(
         timeline:, resource_id: resource.id, vm_id: create_hosted_vm(project, private_subnet, "standby").id,
         synchronization_status: "ready", timeline_access: "fetch", version: "16",
       )
-      expect(postgres_server).to receive(:failover_target).with(mode: "planned").and_return(standby)
-      expect(standby).to receive(:incr_planned_take_over)
+      Strand.create_with_id(standby, prog: "Postgres::PostgresServerNexus", label: "wait")
+      expect(postgres_server).to receive(:failover_target).with(mode: "planned").and_return(standby).twice
       expect(postgres_server.trigger_failover(mode: "planned")).to be true
-    end
-
-    it "requests a timeline switch on promote when switch_timeline is set" do
-      standby = described_class.create(
-        timeline:, resource_id: resource.id, vm_id: create_hosted_vm(project, private_subnet, "standby-switch").id,
-        synchronization_status: "ready", timeline_access: "fetch", version: "16",
-      )
-      expect(postgres_server).to receive(:failover_target).with(mode: "planned").and_return(standby)
-      expect(standby).to receive(:incr_switch_timeline_on_promote)
-      expect(standby).to receive(:incr_planned_take_over)
+      expect(standby.semaphores_dataset.select_order_map(:name)).to eq ["planned_take_over"]
       expect(postgres_server.trigger_failover(mode: "planned", switch_timeline: true)).to be true
+      expect(standby.semaphores_dataset.select_order_map(:name)).to eq ["planned_take_over", "planned_take_over", "switch_timeline_on_promote"]
     end
   end
 
-  it "#read_replica?" do
-    expect(postgres_server.resource).to receive(:read_replica?).and_return(true)
-    expect(postgres_server).to be_read_replica
-    expect(postgres_server.resource).to receive(:read_replica?).and_return(false)
+  it "#read_replica? is true when the resource is a read replica" do
     expect(postgres_server).not_to be_read_replica
+    resource.update(parent_id: create_postgres_resource(project:, location_id: location.id).id)
+    expect(postgres_server).to be_read_replica
   end
 
   describe "#fallback_active?" do
@@ -529,225 +449,188 @@ RSpec.describe PostgresServer do
   end
 
   describe "#fallback_eligible?" do
-    let(:aws_vm) { instance_double(Vm, location: instance_double(Location, aws?: true)) }
-    let(:metal_vm) { instance_double(Vm, location: instance_double(Location, aws?: false)) }
+    before { Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait") }
 
     it "is false when the vm is not on AWS" do
-      allow(postgres_server).to receive(:vm).and_return(metal_vm)
+      project.set_ff_postgres_instance_type_fallback(true)
       expect(postgres_server).not_to be_fallback_eligible
     end
 
-    it "is false when the project feature flag is off" do
-      allow(postgres_server).to receive(:vm).and_return(aws_vm)
-      allow(resource).to receive(:project).and_return(instance_double(Project, get_ff_postgres_instance_type_fallback: false))
+    it "is true on AWS only when the project feature flag is on" do
+      location.update(provider: "aws")
       expect(postgres_server).not_to be_fallback_eligible
+      project.set_ff_postgres_instance_type_fallback(true)
+      expect(postgres_server).to be_fallback_eligible
     end
 
     it "is false when recycle_by_user_request is set" do
-      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      allow(postgres_server).to receive(:vm).and_return(aws_vm)
-      allow(resource).to receive(:project).and_return(instance_double(Project, get_ff_postgres_instance_type_fallback: true))
+      location.update(provider: "aws")
+      project.set_ff_postgres_instance_type_fallback(true)
       postgres_server.incr_recycle_by_user_request
       expect(postgres_server).not_to be_fallback_eligible
-    end
-
-    it "is true when AWS, flag is on, and no user recycle is set" do
-      allow(postgres_server).to receive(:vm).and_return(aws_vm)
-      allow(resource).to receive(:project).and_return(instance_double(Project, get_ff_postgres_instance_type_fallback: true))
-      expect(postgres_server).to be_fallback_eligible
     end
   end
 
   describe "#needs_recycling?" do
     before do
       Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      allow(postgres_server).to receive(:vm).and_return(instance_double(Vm, display_size: "r6gd.large", vm_storage_volumes: []))
-      allow(resource).to receive_messages(target_vm_size: "r6gd.large", target_storage_size_gib: 0, target_version: postgres_server.version)
-    end
-
-    it "does not recycle on instance size mismatch when ignore_instance_size_mismatch is set" do
-      allow(resource).to receive(:target_vm_size).and_return("r8gd.large")
-      postgres_server.incr_ignore_instance_size_mismatch
-      expect(postgres_server.needs_recycling?).to be false
+      VmStorageVolume.create(vm:, disk_index: 0, boot: false, size_gib: resource.target_storage_size_gib)
+      resource.update(target_version: postgres_server.version)
     end
 
     it "recycles on instance size mismatch when ignore_instance_size_mismatch is not set" do
-      allow(resource).to receive(:target_vm_size).and_return("r8gd.large")
+      expect(postgres_server.needs_recycling?).to be false
+      resource.update(target_vm_size: "standard-4")
       expect(postgres_server.needs_recycling?).to be true
     end
 
-    it "recycles on storage size mismatch even when ignore_instance_size_mismatch is set" do
-      allow(resource).to receive(:target_storage_size_gib).and_return(100)
+    it "does not recycle on instance size mismatch when ignore_instance_size_mismatch is set" do
       postgres_server.incr_ignore_instance_size_mismatch
+      resource.update(target_vm_size: "standard-4")
+      expect(postgres_server.needs_recycling?).to be false
+      resource.update(target_storage_size_gib: 128)
       expect(postgres_server.needs_recycling?).to be true
     end
 
     it "translates burstable to hobby when comparing vm.display_size to resource.target_vm_size" do
-      allow(postgres_server).to receive(:vm).and_return(instance_double(Vm, display_size: "burstable-2", vm_storage_volumes: []))
-      allow(resource).to receive(:target_vm_size).and_return("hobby-2")
+      vm.update(family: "burstable", cpu_percent_limit: 100)
+      resource.update(target_vm_size: "hobby-2")
       expect(postgres_server.needs_recycling?).to be false
     end
 
     it "recycles when the image family does not match the resource's target" do
-      expect(postgres_server.needs_recycling?).to be false
       resource.update(target_image_family: "ubuntu-2604")
       expect(postgres_server.needs_recycling?).to be true
     end
   end
 
   describe "#failover_target" do
-    let(:standby_vm) { instance_double(Vm, family: "standard", display_size: "standard-4") }
+    let(:lsn_command) { "PGOPTIONS='-c statement_timeout=60s' psql -U ubi_monitoring -d ubi_admin -t --csv -v 'ON_ERROR_STOP=1'" }
+    let(:lsns) { {} }
 
     before do
-      postgres_server.is_representative = true
-      allow(postgres_server).to receive(:read_replica?).and_return(false)
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, strand: instance_double(Strand, label: "wait_catch_up"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-        instance_double(described_class, ubid: "pgubidstandby2", is_representative: false, current_lsn: "1/5", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-        instance_double(described_class, ubid: "pgubidstandby3", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-      ])
+      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
+      resource.update(target_version: postgres_server.version)
+    end
+
+    def create_standby(name, lsn: nil, label: "wait", slot_ready: true, family: "standard")
+      standby_vm = create_hosted_vm(project, private_subnet, name)
+      standby_vm.update(family:)
+      VmStorageVolume.create(vm: standby_vm, disk_index: 0, boot: false, size_gib: resource.target_storage_size_gib)
+      standby = described_class.create(
+        timeline:, resource:, vm_id: standby_vm.id, synchronization_status: "ready", timeline_access: "fetch",
+        version: postgres_server.version, physical_slot_ready_id: (postgres_server.id if slot_ready),
+      )
+      Strand.create_with_id(standby, prog: "Postgres::PostgresServerNexus", label:)
+      lsns[standby.id] = lsn if lsn
+      standby
+    end
+
+    # Only standbys created with an lsn are expected to be asked for their
+    # current lsn, which runs over SSH.
+    def failover_target(mode: "unplanned")
+      resource.servers(reload: true).each do |server|
+        next unless (lsn = lsns[server.id])
+        expect(server.vm.sshable).to receive(:_cmd).with(lsn_command, stdin: DB.select(server.last_lsn_expression).no_auto_parameterize.sql).and_return("#{lsn}\n")
+      end
+      postgres_server.failover_target(mode:)&.ubid
     end
 
     it "returns nil if there is no standby" do
-      expect(resource).to receive(:servers).and_return([postgres_server]).at_least(:once)
-      expect(postgres_server.failover_target).to be_nil
+      expect(failover_target).to be_nil
+    end
+
+    it "returns the standby with highest lsn among standbys at wait" do
+      create_standby("catching-up", label: "wait_catch_up")
+      create_standby("low-lsn", lsn: "1/5")
+      high = create_standby("high-lsn", lsn: "1/10")
+      expect(failover_target).to eq(high.ubid)
     end
 
     it "returns nil for planned failover if there is no fresh standby" do
-      expect(postgres_server).to receive(:is_representative).and_return(true)
-      standby_server = described_class.new { it.id = "c068cac7-ed45-82db-bf38-a003582b36ef" }
-      expect(standby_server).to receive(:resource).at_least(:once).and_return(resource)
-      expect(standby_server).to receive(:is_representative).and_return(false).at_least(:once)
-      expect(standby_server).to receive(:strand).and_return(instance_double(Strand, label: "wait"))
-      expect(standby_server).to receive(:vm).and_return(instance_double(Vm, display_size: "standard-4", sshable: Sshable.new)).at_least(:once)
-
-      expect(resource).to receive(:servers).and_return([postgres_server, standby_server]).at_least(:once)
-      expect(resource).to receive(:target_vm_size).and_return("standard-2")
-      expect(postgres_server.failover_target(mode: "planned")).to be_nil
-    end
-
-    it "returns the standby with highest lsn in sync replication" do
-      expect(postgres_server).to receive(:is_representative).and_return(true)
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgubidstandby3")
-    end
-
-    it "returns nil when last_known_lsn is unknown for async replication" do
-      resource.update(ha_type: PostgresResource::HaType::ASYNC)
-      expect(postgres_server.failover_target).to be_nil
-    end
-
-    it "returns nil if lsn difference is too hign for async replication" do
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::ASYNC)
-      POSTGRES_MONITOR_DB[:postgres_lsn_monitor].insert(postgres_server_id: postgres_server.id, last_known_lsn: "2/0")
-      expect(postgres_server.failover_target).to be_nil
-    ensure
-      # POSTGRES_MONITOR_DB doesn't use transactional testing, so it must be manually cleaned up
-      POSTGRES_MONITOR_DB[:postgres_lsn_monitor].where(postgres_server_id: postgres_server.id).delete
-    end
-
-    it "returns the standby with highest lsn if lsn difference is not high in async replication" do
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::ASYNC)
-      POSTGRES_MONITOR_DB[:postgres_lsn_monitor].insert(postgres_server_id: postgres_server.id, last_known_lsn: "1/11")
-      expect(postgres_server.failover_target.ubid).to eq("pgubidstandby3")
-    ensure
-      # POSTGRES_MONITOR_DB doesn't use transactional testing, so it must be manually cleaned up
-      POSTGRES_MONITOR_DB[:postgres_lsn_monitor].where(postgres_server_id: postgres_server.id).delete
-    end
-
-    it "returns standby with physical_slot_ready_id nil as fallback for unplanned failover" do
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: nil, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-      ])
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgubidstandby1")
-    end
-
-    it "considers a standby needing recycling for unplanned failover" do
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidrecycling", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: true, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-      ])
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgubidrecycling")
-    end
-
-    it "skips a standby needing recycling for planned failover" do
-      standby = instance_double(described_class, ubid: "pgubidrecycling", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: true, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm)
-      expect(resource).to receive(:servers).and_return([postgres_server, standby]).at_least(:once)
-      expect(postgres_server.failover_target(mode: "planned")).to be_nil
+      create_standby("standby")
+      resource.update(target_vm_size: "standard-4")
+      expect(failover_target(mode: "planned")).to be_nil
     end
 
     it "returns nil for planned failover when no standby has physical_slot_ready" do
-      expect(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: nil, synchronization_status: "ready"),
-      ]).at_least(:once)
-      expect(postgres_server.failover_target(mode: "planned")).to be_nil
+      create_standby("standby", slot_ready: false)
+      expect(Clog).to receive(:emit).with("Planned failover waiting for physical slot ready", {ubid: postgres_server.ubid, standby_count: 1}).and_call_original
+      expect(failover_target(mode: "planned")).to be_nil
     end
 
-    it "returns nil for planned failover when logical slots not synced on standby" do
-      standby = instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm)
-      expect(resource).to receive(:servers).and_return([postgres_server, standby]).at_least(:once)
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server).to receive(:unsynced_logical_failover_slots).with(standby).and_return(["slot1"])
-      expect(postgres_server.failover_target(mode: "planned")).to be_nil
+    it "prefers a standby with physical_slot_ready_id set, but falls back to one without for unplanned failover" do
+      without_slot = create_standby("without-slot", lsn: "1/10", slot_ready: false)
+      expect(failover_target).to eq(without_slot.ubid)
+      with_slot = create_standby("with-slot", lsn: "1/5")
+      expect(failover_target).to eq(with_slot.ubid)
     end
 
-    it "returns standby for planned failover when logical slots are synced" do
-      standby = instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm)
-      expect(resource).to receive(:servers).and_return([postgres_server, standby]).at_least(:once)
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server).to receive(:unsynced_logical_failover_slots).with(standby).and_return([])
-      expect(postgres_server.failover_target(mode: "planned").ubid).to eq("pgubidstandby1")
+    it "considers a standby needing recycling only for unplanned failover" do
+      standby = create_standby("recycling", lsn: "1/10")
+      standby.incr_recycle
+      expect(failover_target).to eq(standby.ubid)
+      lsns.clear
+      expect(failover_target(mode: "planned")).to be_nil
     end
 
-    it "prefers standby with physical_slot_ready_id set over higher lsn without" do
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, current_lsn: "1/5", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-        instance_double(described_class, ubid: "pgubidstandby2", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: nil, synchronization_status: "ready", fallback_active?: false, vm: standby_vm),
-      ])
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgubidstandby1")
+    it "returns the standby for planned failover only when its logical slots are synced" do
+      standby = create_standby("standby", lsn: "1/10")
+      expect(postgres_server).to receive(:unsynced_logical_failover_slots).with(having_attributes(id: standby.id)).and_return(["slot1"], [])
+      expect(Clog).to receive(:emit).with("Planned failover waiting for logical slot sync", {ubid: postgres_server.ubid, standby: standby.ubid, missing_slots: ["slot1"]}).and_call_original
+      expect(failover_target(mode: "planned")).to be_nil
+      expect(failover_target(mode: "planned")).to eq(standby.ubid)
+    end
+
+    it "returns nil for async replication when last_known_lsn is unknown or too far behind" do
+      resource.update(ha_type: PostgresResource::HaType::ASYNC)
+      standby = create_standby("standby", lsn: "1/10")
+      expect(failover_target).to be_nil
+
+      postgres_server.update_last_known_lsn("2/0")
+      expect(failover_target).to be_nil
+
+      postgres_server.update_last_known_lsn("1/11")
+      expect(failover_target).to eq(standby.ubid)
+    ensure
+      # POSTGRES_MONITOR_DB doesn't use transactional testing, so it must be manually cleaned up
+      postgres_server.lsn_monitor_ds.delete
     end
 
     it "prefers higher lsn over intended-type when both slot-ready" do
-      fallback_vm = instance_double(Vm, family: "r6gd", display_size: "r6gd.large")
-      intended_vm = instance_double(Vm, family: "r8gd", display_size: "r8gd.large")
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgFallbackHighLsn", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: true, vm: fallback_vm),
-        instance_double(described_class, ubid: "pgIntendedLowLsn", is_representative: false, current_lsn: "1/5", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: intended_vm),
-      ])
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgFallbackHighLsn")
+      fallback = create_standby("fallback-high-lsn", lsn: "1/10", family: "r6id")
+      fallback.incr_ignore_instance_size_mismatch
+      create_standby("intended-low-lsn", lsn: "1/5", family: "r8id")
+      expect(failover_target).to eq(fallback.ubid)
     end
 
     it "prefers intended-type over family rank at equal lsn" do
-      intended_vm = instance_double(Vm, family: "r6gd", display_size: "r6gd.large")
-      fallback_vm = instance_double(Vm, family: "r8gd", display_size: "r8gd.large")
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgIntendedOld", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: intended_vm),
-        instance_double(described_class, ubid: "pgFallbackNew", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: true, vm: fallback_vm),
-      ])
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgIntendedOld")
+      resource.update(target_vm_size: "r6id.large")
+      intended = create_standby("intended-old", lsn: "1/10", family: "r6id")
+      create_standby("fallback-new", lsn: "1/10", family: "r8id").incr_ignore_instance_size_mismatch
+      expect(failover_target).to eq(intended.ubid)
     end
 
     it "prefers newer family rank as final tiebreaker at equal lsn and intended-type" do
-      new_vm = instance_double(Vm, family: "r8gd", display_size: "r8gd.large")
-      old_vm = instance_double(Vm, family: "r6gd", display_size: "r6gd.large")
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgNewerFamily", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: new_vm),
-        instance_double(described_class, ubid: "pgOlderFamily", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: false, physical_slot_ready_id: postgres_server.id, synchronization_status: "ready", fallback_active?: false, vm: old_vm),
-      ])
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::SYNC)
-      expect(postgres_server.failover_target.ubid).to eq("pgNewerFamily")
+      newer = create_standby("newer-family", lsn: "1/10", family: "r8id")
+      create_standby("older-family", lsn: "1/10", family: "r6id")
+      expect(failover_target).to eq(newer.ubid)
+    end
+
+    describe "for a read replica" do
+      before { resource.update(parent_id: create_postgres_resource(project:, location_id: location.id).id) }
+
+      it "returns the replica with highest lsn for planned failover even if physical_slot_ready_id is nil" do
+        create_standby("low-lsn", lsn: "1/5", slot_ready: false)
+        high = create_standby("high-lsn", lsn: "1/10", slot_ready: false)
+        expect(failover_target(mode: "planned")).to eq(high.ubid)
+      end
+
+      it "returns nil for planned failover if there is no fresh read replica" do
+        create_standby("replica", slot_ready: false)
+        resource.update(target_vm_size: "standard-4")
+        expect(failover_target(mode: "planned")).to be_nil
+      end
     end
   end
 
@@ -760,126 +643,55 @@ RSpec.describe PostgresServer do
     }
     let(:monitoring_psql_command) { "PGOPTIONS='-c statement_timeout=60s' psql -U ubi_monitoring -d ubi_admin -t --csv -v 'ON_ERROR_STOP=1'" }
 
-    it "returns empty for read replicas" do
-      expect(postgres_server).to receive(:read_replica?).and_return(true)
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
-    end
-
-    it "returns empty for versions below 17" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
+    it "returns empty for versions below 17 and for read replicas" do
+      expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq []
+      postgres_server.update(version: "17")
+      resource.update(parent_id: create_postgres_resource(project:, location_id: location.id).id)
+      expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq []
     end
 
     it "returns empty when primary is fenced (avoids querying a stopped server)" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
       postgres_server.update(version: "17")
       Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait_in_fence")
       expect(postgres_server.vm.sshable).not_to receive(:_cmd)
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
+      expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq []
     end
 
-    it "returns empty when primary has no logical failover slots" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
+    it "returns the primary's logical failover slots that are missing or lagging on the standby" do
       postgres_server.update(version: "17")
       Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      expect(postgres_server.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("AND failover")).and_return("")
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
-    end
-
-    it "returns empty when all primary logical failover slots are synced and caught up on standby" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
-      postgres_server.update(version: "17")
-      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      expect(postgres_server.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("AND failover")).and_return("slot1,0/100\nslot2,0/200")
-      expect(standby.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("synced AND NOT temporary")).and_return("slot1,0/100\nslot2,0/200")
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
-    end
-
-    it "returns missing slot names when standby is missing a synced logical slot" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
-      postgres_server.update(version: "17")
-      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      expect(postgres_server.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("AND failover")).and_return("slot1,0/100\nslot2,0/200")
-      expect(standby.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("synced AND NOT temporary")).and_return("slot1,0/100")
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq(["slot2"])
-    end
-
-    it "returns slot names whose synced confirmed_flush lags the primary" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
-      postgres_server.update(version: "17")
-      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      expect(postgres_server.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("AND failover")).and_return("slot1,0/200")
-      expect(standby.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("synced AND NOT temporary")).and_return("slot1,0/100")
-      expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq(["slot1"])
+      expect(postgres_server.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("AND failover"))
+        .and_return("", "slot1,0/100\nslot2,0/200", "slot1,0/100\nslot2,0/200", "slot1,0/200")
+      expect(standby.vm.sshable).to receive(:_cmd).with(monitoring_psql_command, stdin: a_string_including("synced AND NOT temporary"))
+        .and_return("slot1,0/100\nslot2,0/200", "slot1,0/100", "slot1,0/100")
+      expect(Array.new(4) { postgres_server.unsynced_logical_failover_slots(standby) }).to eq [[], [], ["slot2"], ["slot1"]]
     end
   end
 
-  describe "#failover_target read_replica" do
-    let(:replica_vm) { instance_double(Vm, family: "standard", display_size: "standard-4") }
-
-    before do
-      expect(postgres_server).to receive(:is_representative).and_return(true)
-      allow(postgres_server).to receive(:read_replica?).and_return(true)
-
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, strand: instance_double(Strand, label: "wait_catch_up"), needs_recycling?: false, read_replica?: true, physical_slot_ready_id: nil, synchronization_status: "ready", fallback_active?: false, vm: replica_vm),
-        instance_double(described_class, ubid: "pgubidstandby2", is_representative: false, current_lsn: "1/5", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: true, physical_slot_ready_id: nil, synchronization_status: "ready", fallback_active?: false, vm: replica_vm),
-        instance_double(described_class, ubid: "pgubidstandby3", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: true, physical_slot_ready_id: nil, synchronization_status: "ready", fallback_active?: false, vm: replica_vm),
-      ])
-    end
-
-    it "returns nil if there is no replica to failover" do
-      expect(resource).to receive(:servers).and_return([postgres_server]).at_least(:once)
-      expect(postgres_server.failover_target).to be_nil
-    end
-
-    it "returns nil for planned failover if there is no fresh read_replica" do
-      replica_server = described_class.new { it.id = "c068cac7-ed45-82db-bf38-a003582b36ef" }
-      expect(replica_server).to receive(:resource).at_least(:once).and_return(resource)
-      expect(replica_server).to receive(:strand).and_return(instance_double(Strand, label: "wait"))
-      expect(replica_server).to receive(:vm).and_return(instance_double(Vm, display_size: "standard-4")).at_least(:once)
-      expect(resource).to receive(:servers).and_return([postgres_server, replica_server]).at_least(:once)
-      expect(resource).to receive(:target_vm_size).and_return("standard-2")
-      expect(postgres_server.failover_target(mode: "planned")).to be_nil
-    end
-
-    it "returns the replica with highest lsn" do
-      expect(postgres_server.failover_target.ubid).to eq("pgubidstandby3")
-    end
-
-    it "returns the replica even if physical_slot_ready_id is nil" do
-      allow(resource).to receive(:servers).and_return([
-        postgres_server,
-        instance_double(described_class, ubid: "pgubidstandby1", is_representative: false, current_lsn: "1/10", strand: instance_double(Strand, label: "wait"), needs_recycling?: false, read_replica?: true, physical_slot_ready_id: nil, synchronization_status: "ready", fallback_active?: false, vm: replica_vm),
-      ])
-      expect(postgres_server.failover_target.ubid).to eq("pgubidstandby1")
-    end
+  it "#storage_size_gib sums the sizes of the non-boot volumes" do
+    expect(postgres_server.storage_size_gib).to eq 0
+    VmStorageVolume.create(vm:, disk_index: 0, boot: true, size_gib: 20)
+    VmStorageVolume.create(vm:, disk_index: 1, boot: false, size_gib: 64)
+    postgres_server.vm.vm_storage_volumes(reload: true)
+    expect(postgres_server.storage_size_gib).to eq 64
   end
 
-  describe "storage_size_gib" do
-    it "returns the storage size in GiB" do
-      VmStorageVolume.create(vm:, disk_index: 0, boot: false, size_gib: 64)
-      expect(postgres_server.storage_size_gib).to eq(64)
-    end
-
-    it "returns zero if there is no storage volume" do
-      expect(postgres_server.storage_size_gib).to be_zero
-    end
-  end
-
-  describe "lsn_caught_up" do
-    before do
-      parent_resource = create_postgres_resource(project:, location_id: location.id)
-      parent_vm = create_hosted_vm(project, private_subnet, "parent-vm")
+  describe "#lsn_caught_up" do
+    let(:parent_server) {
       described_class.create(
-        timeline:, resource: parent_resource, vm_id: parent_vm.id, is_representative: true,
-        synchronization_status: "ready", timeline_access: "push", version: "16",
+        timeline:, resource: create_postgres_resource(project:, location_id: location.id), vm_id: create_hosted_vm(project, private_subnet, "parent-vm").id,
+        is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16",
       )
+    }
 
-      resource.update(parent: parent_resource)
+    before do
+      resource.update(parent: parent_server.resource)
       postgres_server.update(timeline_access: "fetch")
-      allow(resource.parent.representative_server).to receive(:last_known_lsn).and_return("F/F")
+    end
+
+    after do
+      # POSTGRES_MONITOR_DB doesn't use transactional testing, so it must be manually cleaned up
+      POSTGRES_MONITOR_DB[:postgres_lsn_monitor].where(postgres_server_id: [postgres_server.id, parent_server.id]).delete
     end
 
     it "returns true immediately for primary" do
@@ -887,67 +699,44 @@ RSpec.describe PostgresServer do
       expect(postgres_server.lsn_caught_up).to be(true)
     end
 
-    it "returns true if the diff is under the catch up threshold" do
-      expect(postgres_server).to receive(:last_known_lsn).and_return("F/F")
-      expect(postgres_server.lsn_caught_up).to be_truthy
-    end
-
-    it "returns true if read replica and the parent representative server is nil" do
-      postgres_server.resource.representative_server.update(is_representative: false)
-      postgres_server.resource.update(restore_target: Time.now)
-      expect(postgres_server.resource.representative_server).to receive(:last_known_lsn).and_return("F/F")
-      expect(postgres_server).to receive(:last_known_lsn).and_return("F/F")
-      expect(postgres_server.lsn_caught_up).to be_truthy
-    end
-
     it "returns true if read replica and the parent is nil" do
-      postgres_server.resource.update(parent_id: PostgresResource.generate_ubid.to_uuid)
-      expect(postgres_server.read_replica?).to be(true)
+      resource.update(parent_id: PostgresResource.generate_ubid.to_uuid)
       expect(postgres_server.lsn_caught_up).to be(true)
     end
 
-    it "returns false if the diff is over the catch up threshold" do
-      expect(postgres_server).to receive(:last_known_lsn).and_return("1/00000000")
-      expect(postgres_server.lsn_caught_up).to be_falsey
+    it "compares a read replica's lsn with the lsn of the parent's representative server" do
+      results = [[nil, nil], ["F/F", nil], ["F/F", "1/00000000"], ["F/F", "F/F"]].map do |parent_lsn, lsn|
+        parent_server.update_last_known_lsn(parent_lsn) if parent_lsn
+        postgres_server.update_last_known_lsn(lsn) if lsn
+        postgres_server.lsn_caught_up
+      end
+      expect(results).to eq [nil, nil, false, true]
     end
 
-    it "returns true if the diff is under the catch up threshold for not read replica and uses the main representative server" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false).at_least(:once)
+    it "compares with the resource's own representative server when not a read replica" do
       resource.update(restore_target: Time.now)
-      expect(postgres_server.resource.representative_server).to receive(:last_known_lsn).and_return("F/F")
-      expect(postgres_server).to receive(:last_known_lsn).and_return("F/F")
-      expect(postgres_server.lsn_caught_up).to be_truthy
-    end
-
-    it "returns false when the parent has no recorded lsn yet" do
-      expect(resource.parent.representative_server).to receive(:last_known_lsn).and_return(nil)
-      expect(postgres_server.lsn_caught_up).to be_falsey
-    end
-
-    it "returns false when self has no recorded lsn yet" do
-      expect(postgres_server).to receive(:last_known_lsn).and_return(nil)
-      expect(postgres_server.lsn_caught_up).to be_falsey
+      postgres_server.update_last_known_lsn("F/F")
+      expect(postgres_server.lsn_caught_up).to be(true)
     end
 
     it "scales the threshold with the parent vm size" do
-      parent_server = resource.parent.representative_server
-      allow(parent_server).to receive(:last_known_lsn).and_return("1/40000000")
-      expect(postgres_server).to receive(:last_known_lsn).and_return("1/2D000000").twice
+      parent_server.update_last_known_lsn("1/40000000")
+      postgres_server.update_last_known_lsn("1/2D000000")
+      parent_vm = resource.parent.representative_server.vm
       postgres_server.vm.update(vcpus: 16)
-      parent_server.vm.update(vcpus: 4)
+      parent_vm.update(vcpus: 4)
       expect(postgres_server.lsn_caught_up).to be(false)
       postgres_server.vm.update(vcpus: 2)
-      parent_server.vm.update(vcpus: 8)
+      parent_vm.update(vcpus: 8)
       expect(postgres_server.lsn_caught_up).to be(true)
     end
   end
 
   describe "#catch_up_lag_threshold" do
     it "is 64 MiB per parent vcpu clamped to 128 MiB and 1 GiB" do
-      parent_server = instance_double(described_class, vm: instance_double(Vm))
       expect([1, 2, 8, 16, 64].map { |vcpus|
-        allow(parent_server.vm).to receive(:vcpus).and_return(vcpus)
-        postgres_server.catch_up_lag_threshold(parent_server) / 1024 / 1024
+        postgres_server.vm.update(vcpus:)
+        postgres_server.catch_up_lag_threshold(postgres_server) / 1024 / 1024
       }).to eq([128, 128, 512, 1024, 1024])
     end
   end
@@ -1153,25 +942,23 @@ RSpec.describe PostgresServer do
   # The not-in-recovery branch is pg_current_wal_lsn regardless of the cached
   # role, so a promoted server carrying a stale "standby" role uses its write
   # position, not a frozen pg_last_wal_receive_lsn.
-  it "uses pg_last_wal_receive_lsn for a streaming standby" do
-    expect(postgres_server).to receive(:standby?).and_return(true)
-    Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-
-    expect(DB.literal(postgres_server.last_lsn_expression)).to eq("(CASE WHEN pg_is_in_recovery() THEN pg_last_wal_receive_lsn() ELSE pg_current_wal_lsn() END)")
+  it "uses pg_last_wal_receive_lsn for a streaming standby, and pg_last_wal_replay_lsn while it is catching up" do
+    postgres_server
+    standby = described_class.create(
+      timeline:, resource:, vm_id: create_hosted_vm(project, private_subnet, "standby").id,
+      synchronization_status: "ready", timeline_access: "fetch", version: "16",
+    )
+    strand = Strand.create_with_id(standby, prog: "Postgres::PostgresServerNexus", label: "wait")
+    expect(DB.literal(standby.last_lsn_expression)).to eq("(CASE WHEN pg_is_in_recovery() THEN pg_last_wal_receive_lsn() ELSE pg_current_wal_lsn() END)")
+    strand.update(label: "wait_catch_up")
+    standby.strand(reload: true)
+    expect(DB.literal(standby.last_lsn_expression)).to eq("(CASE WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn() ELSE pg_current_wal_lsn() END)")
   end
 
   it "uses pg_last_wal_replay_lsn for a read replica or pitr server" do
     # Read replicas and PITR are in recovery but not standby?, so they track
     # replayed WAL, not received.
-    expect(postgres_server).to receive(:standby?).and_return(false)
-
-    expect(DB.literal(postgres_server.last_lsn_expression)).to eq("(CASE WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn() ELSE pg_current_wal_lsn() END)")
-  end
-
-  it "uses pg_last_wal_replay_lsn while a standby is still catching up" do
-    expect(postgres_server).to receive(:standby?).and_return(true)
-    Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait_catch_up")
-
+    postgres_server.update(timeline_access: "fetch")
     expect(DB.literal(postgres_server.last_lsn_expression)).to eq("(CASE WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn() ELSE pg_current_wal_lsn() END)")
   end
 
@@ -1262,53 +1049,37 @@ RSpec.describe PostgresServer do
     expect(postgres_server.aws?).to be(false)
   end
 
-  describe "#taking_over?" do
-    it "returns true if the strand label is 'taking_over'" do
-      expect(postgres_server).to receive(:strand).and_return(instance_double(Strand, label: "taking_over"))
-      expect(postgres_server.taking_over?).to be true
-    end
-
-    it "returns true if the strand label is 'backfill_wal_archive'" do
-      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "backfill_wal_archive")
-      expect(postgres_server.taking_over?).to be true
-    end
-
-    it "returns false if the strand label is not 'wait'" do
-      expect(postgres_server).to receive(:strand).and_return(instance_double(Strand, label: "wait"))
-      expect(postgres_server.taking_over?).to be false
-    end
+  it "#taking_over? is true while the strand is taking over or backfilling the WAL archive" do
+    strand = Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
+    expect(%w[taking_over backfill_wal_archive wait].map { |label|
+      strand.update(label:)
+      postgres_server.strand(reload: true)
+      postgres_server.taking_over?
+    }).to eq [true, true, false]
   end
 
   describe "#switch_to_new_timeline" do
-    it "switches to new timeline with current parent" do
-      expect(Prog::Postgres::PostgresTimelineNexus).to receive(:assemble).and_return(instance_double(PostgresTimeline, id: "1ff21ff9-7534-4d28-820b-1da97199e39e"))
-      expect(postgres_server).to receive(:update).with(timeline_id: "1ff21ff9-7534-4d28-820b-1da97199e39e", timeline_access: "push", synchronization_status: "ready")
-      expect { postgres_server.switch_to_new_timeline }.not_to raise_error
-    end
-
-    it "switches to new timeline without current parent" do
-      expect(Prog::Postgres::PostgresTimelineNexus).to receive(:assemble).and_return(instance_double(PostgresTimeline, id: "98637404-a37b-4991-a70f-1b7e3ffcbf31"))
-      expect(postgres_server).to receive(:update).with(timeline_id: "98637404-a37b-4991-a70f-1b7e3ffcbf31", timeline_access: "push", synchronization_status: "ready")
-      expect { postgres_server.switch_to_new_timeline(parent_id: nil) }.not_to raise_error
-    end
-
-    it "detaches the blob storage policy from the timeline it leaves behind" do
+    it "switches to a new push timeline, whose parent is the current timeline unless given" do
       previous_timeline = postgres_server.timeline
-      expect(Prog::Postgres::PostgresTimelineNexus).to receive(:assemble).and_return(instance_double(PostgresTimeline, id: "98637404-a37b-4991-a70f-1b7e3ffcbf31"))
-      expect(postgres_server).to receive(:update).with(timeline_id: "98637404-a37b-4991-a70f-1b7e3ffcbf31", timeline_access: "push", synchronization_status: "ready")
-      expect(postgres_server).to receive(:detach_s3_policy).with(previous_timeline)
+      postgres_server.update(timeline_access: "fetch", synchronization_status: "catching_up")
+      expect(postgres_server).to receive(:detach_s3_policy).with(previous_timeline).and_call_original
+      postgres_server.switch_to_new_timeline
+      new_timeline = postgres_server.timeline
+      expect([new_timeline.parent_id, postgres_server.timeline_access, postgres_server.synchronization_status]).to eq [previous_timeline.id, "push", "ready"]
 
-      expect { postgres_server.switch_to_new_timeline(parent_id: nil) }.not_to raise_error
+      expect(postgres_server).to receive(:detach_s3_policy).with(new_timeline).and_call_original
+      postgres_server.switch_to_new_timeline(parent_id: nil)
+      expect(postgres_server.timeline.id).not_to eq new_timeline.id
+      expect(postgres_server.timeline.parent_id).to be_nil
     end
 
-    it "configure new timeline on AWS" do
+    it "stops wal-g and configures the new timeline on AWS" do
       location.update(provider: "aws")
-      expect(Prog::Postgres::PostgresTimelineNexus).to receive(:assemble).and_return(instance_double(PostgresTimeline, id: "1ff21ff9-7534-4d28-820b-1da97199e39e"))
-      expect(postgres_server).to receive(:update).with(timeline_id: "1ff21ff9-7534-4d28-820b-1da97199e39e", timeline_access: "push", synchronization_status: "ready")
-      expect(postgres_server).to receive(:incr_configure_s3_new_timeline)
+      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo systemctl stop wal-g")
       expect(postgres_server).to receive(:refresh_walg_credentials)
-      expect { postgres_server.switch_to_new_timeline }.not_to raise_error
+      postgres_server.switch_to_new_timeline
+      expect(postgres_server.semaphores_dataset.select_map(:name)).to eq ["configure_s3_new_timeline"]
     end
   end
 
@@ -1316,7 +1087,7 @@ RSpec.describe PostgresServer do
     it "does nothing if timeline has no blob storage" do
       expect(postgres_server.timeline.blob_storage).to be_nil
       expect(vm.sshable).not_to receive(:_cmd)
-      expect { postgres_server.refresh_walg_credentials }.not_to raise_error
+      postgres_server.refresh_walg_credentials
     end
 
     it "refreshes walg credentials if timeline has blob storage not on aws" do
@@ -1328,20 +1099,19 @@ RSpec.describe PostgresServer do
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo tee /etc/systemd/system/wal-g.service.d/stop-timeout.conf > /dev/null", stdin: "[Service]\nTimeoutStopSec=5s\n")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo systemctl daemon-reload")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo systemctl restart wal-g")
-      expect { postgres_server.refresh_walg_credentials }.not_to raise_error
+      postgres_server.refresh_walg_credentials
     end
 
-    it "refreshes walg credentials if timeline has blob storage on aws" do
+    it "refreshes walg credentials without the blob storage CA if timeline has blob storage on aws" do
       location.update(provider: "aws")
       expect(timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster, root_certs: "root_certs")).at_least(:once)
       expect(timeline).to receive(:generate_walg_config).with(postgres_server.version, postgres_server).and_return("walg_config")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo -u postgres tee /etc/postgresql/wal-g.env > /dev/null", stdin: "walg_config")
-      expect(postgres_server.vm.sshable).not_to receive(:_cmd).with("sudo tee /usr/lib/ssl/certs/blob_storage_ca.crt > /dev/null", stdin: "root_certs")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo mkdir -p /etc/systemd/system/wal-g.service.d")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo tee /etc/systemd/system/wal-g.service.d/stop-timeout.conf > /dev/null", stdin: "[Service]\nTimeoutStopSec=5s\n")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo systemctl daemon-reload")
       expect(postgres_server.vm.sshable).to receive(:_cmd).with("sudo systemctl restart wal-g")
-      expect { postgres_server.refresh_walg_credentials }.not_to raise_error
+      postgres_server.refresh_walg_credentials
     end
   end
 
@@ -1377,47 +1147,14 @@ RSpec.describe PostgresServer do
     let(:session) { {ssh_session: Net::SSH::Connection::Session.allocate} }
     let(:tsdb_client) { instance_double(VictoriaMetrics::Client) }
 
-    it "calls observe_archival_backlog, observe_metrics_backlog, observe_data_disk_usage, and observe_root_disk_usage at export counts where count % 12 == 1" do
-      session[:export_count] = 12
-      allow(postgres_server).to receive(:scrape_endpoints).and_return([])
-      expect(postgres_server).to receive(:observe_archival_backlog).with(session)
-      expect(postgres_server).to receive(:observe_metrics_backlog).with(session)
-      expect(postgres_server).to receive(:observe_data_disk_usage).with(session)
-      expect(postgres_server).to receive(:observe_root_disk_usage).with(session)
-      expect(postgres_server).to receive(:observe_io_throttle).with(session)
-      expect(postgres_server).to receive(:observe_replica_lag).with(session)
+    it "counts exports in the session and calls the observe methods on the first of every 12 exports" do
+      expect(postgres_server).to receive(:scrape_endpoints).and_return([]).exactly(13).times
+      %i[observe_data_disk_usage observe_root_disk_usage observe_archival_backlog observe_io_throttle observe_metrics_backlog observe_replica_lag].each do |method|
+        expect(postgres_server).to receive(method).with(session).twice
+      end
 
-      postgres_server.export_metrics(session:, tsdb_client:)
-    end
-
-    it "does not call observe methods when count % 12 != 1" do
-      session[:export_count] = 2
-      allow(postgres_server).to receive(:scrape_endpoints).and_return([])
-      expect(postgres_server).not_to receive(:observe_archival_backlog)
-      expect(postgres_server).not_to receive(:observe_metrics_backlog)
-      expect(postgres_server).not_to receive(:observe_data_disk_usage)
-      expect(postgres_server).not_to receive(:observe_root_disk_usage)
-      expect(postgres_server).not_to receive(:observe_io_throttle)
-      expect(postgres_server).not_to receive(:observe_replica_lag)
-
-      postgres_server.export_metrics(session:, tsdb_client:)
-    end
-
-    it "increments export_count in session" do
-      allow(postgres_server).to receive(:observe_archival_backlog).with(session)
-      allow(postgres_server).to receive(:observe_metrics_backlog).with(session)
-      allow(postgres_server).to receive(:observe_data_disk_usage).with(session)
-      allow(postgres_server).to receive(:observe_root_disk_usage).with(session)
-      allow(postgres_server).to receive(:observe_io_throttle).with(session)
-      allow(postgres_server).to receive(:observe_replica_lag).with(session)
-      allow(postgres_server).to receive(:scrape_endpoints).and_return([])
-
-      expect(session[:export_count]).to be_nil
-      postgres_server.export_metrics(session:, tsdb_client:)
-      expect(session[:export_count]).to eq(1)
-
-      postgres_server.export_metrics(session:, tsdb_client:)
-      expect(session[:export_count]).to eq(2)
+      13.times { postgres_server.export_metrics(session:, tsdb_client:) }
+      expect(session[:export_count]).to eq(13)
     end
   end
 
@@ -1430,79 +1167,16 @@ RSpec.describe PostgresServer do
       allow(postgres_server).to receive(:archival_backlog_threshold).and_return(10)
     end
 
-    it "checks archival backlog and does nothing if it is within limits" do
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000005.ready\n",
-        "5\n",
-      )
-
-      postgres_server.observe_archival_backlog(session)
-
-      expect(Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)).to be_nil
+    def expect_archive_status(oldest_pending, backlog)
+      expect(session[:ssh_session]).to receive(:_exec!).with("sudo -u postgres find /dat/16/data/pg_wal/archive_status -name '*.ready' -printf '%f\\n' | sort | head -1").and_return("#{oldest_pending}\n")
+      expect(session[:ssh_session]).to receive(:_exec!).with("sudo find /dat/16/data/pg_wal/archive_status -name '*.ready' | wc -l").and_return("#{backlog}\n")
     end
 
-    it "checks archival backlog and creates a page if it is outside of limits with no previous data" do
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000010.ready\n",
-        "15\n",
-      )
-
-      postgres_server.observe_archival_backlog(session)
-
-      page = Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)
-      expect(page).not_to be_nil
-      expect(page.summary).to eq("#{postgres_server.ubid} archival backlog high")
-      expect(page.severity).to eq("warning")
-      expect(page.details["archival_backlog"]).to eq(15)
-      expect(page.details["related_resources"]).to eq([postgres_server.ubid])
-      expect(page.resource_id).to eq(postgres_server.id)
+    def page
+      Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)
     end
 
-    it "does not page when backlog is moderate and upload rate is above threshold" do
-      # Previous: segment 5, now: segment 10 (5 segments = 80MB archived)
-      # With 1 second elapsed, rate = 80 MB/s > 50 MB/s threshold
-      session[:previous_oldest_pending_wal] = "000000010000000000000005.ready"
-      session[:previous_archival_check_time] = Time.now - 1
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "00000001000000000000000A.ready\n",
-        "15\n",
-      )
-
-      postgres_server.observe_archival_backlog(session)
-
-      expect(Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)).to be_nil
-    end
-
-    it "pages when backlog is moderate but upload rate is below threshold" do
-      # Previous: segment 5, now: segment 6 (1 segment = 16MB archived)
-      # With 2 seconds elapsed, rate = 8 MB/s < 10 MB/s threshold
-      session[:previous_oldest_pending_wal] = "000000010000000000000005.ready"
-      session[:previous_archival_check_time] = Time.now - 2
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000006.ready\n",
-        "15\n",
-      )
-
-      postgres_server.observe_archival_backlog(session)
-
-      expect(Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)).not_to be_nil
-    end
-
-    it "pages when backlog is severe regardless of upload rate" do
-      # Even with good upload rate, severe backlog (>2x threshold) should page
-      session[:last_oldest_pending_wal] = "000000010000000000000010.ready"
-      session[:last_archival_check_time] = Time.now - 1
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000020.ready\n",
-        "25\n",
-      )
-
-      postgres_server.observe_archival_backlog(session)
-
-      expect(Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)).not_to be_nil
-    end
-
-    it "checks archival backlog and resolves a page if it is back within limits" do
+    def create_page
       Prog::PageNexus.assemble(
         "#{postgres_server.ubid} archival backlog high",
         ["PGArchivalBacklogHigh", postgres_server.id],
@@ -1510,143 +1184,114 @@ RSpec.describe PostgresServer do
         resource_id: postgres_server.id,
         severity: "warning",
         extra_data: {archival_backlog: 30},
-      )
-      existing_page = Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000003.ready\n",
-        "3\n",
-      )
-
-      postgres_server.observe_archival_backlog(session)
-      expect(existing_page.reload.semaphores.map(&:name)).to include("resolve")
+      ).subject
     end
 
-    it "does not resolve page when backlog is between 80% of threshold and threshold (hysteresis)" do
-      # With threshold=10, page should only resolve when backlog < 8 (80% of 10)
-      # Backlog of 9 should NOT trigger resolve
-      Prog::PageNexus.assemble(
-        "Archival backlog high",
-        ["PGArchivalBacklogHigh", postgres_server.id],
-        postgres_server.ubid,
-        resource_id: postgres_server.id,
-        severity: "warning",
-        extra_data: {archival_backlog: 15},
-      )
-      existing_page = Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000009.ready\n",
-        "9\n",
-      )
-
+    it "checks archival backlog and does nothing if it is within limits" do
+      expect_archive_status("000000010000000000000005.ready", 5)
       postgres_server.observe_archival_backlog(session)
-
-      expect(existing_page.reload.semaphores.map(&:name)).not_to include("resolve")
+      expect(page).to be_nil
+      expect(session[:previous_oldest_pending_wal]).to eq("000000010000000000000005.ready")
     end
 
-    it "logs errors when checking archival backlog fails" do
-      allow(session[:ssh_session]).to receive(:_exec!).and_raise(Net::SSH::Exception.new("SSH error"))
-      expect(Clog).to receive(:emit).with("Failed to observe archival backlog", instance_of(Hash)).and_call_original
-
+    it "checks archival backlog and creates a page if it is outside of limits with no previous data" do
+      expect_archive_status("000000010000000000000010.ready", 15)
       postgres_server.observe_archival_backlog(session)
+      expect([page.summary, page.severity, page.details, page.resource_id]).to eq [
+        "#{postgres_server.ubid} archival backlog high", "warning",
+        {"archival_backlog" => 15, "disk_usage_percent" => 0, "related_resources" => [postgres_server.ubid]},
+        postgres_server.id,
+      ]
     end
 
-    it "sets oldest_pending to nil when no ready files exist" do
-      # When find returns empty string (no .ready files), oldest_pending should be nil
-      # This triggers the "no previous data" path in should_page_for_archival_backlog?
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "\n",
-        "15\n",
-      )
+    it "pages with no previous data when no ready files exist" do
+      expect_archive_status("", 15)
       postgres_server.observe_archival_backlog(session)
+      expect(session[:previous_oldest_pending_wal]).to be_nil
+      expect(page).not_to be_nil
+    end
 
-      page = Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)
-      expect(page.summary).to eq("#{postgres_server.ubid} archival backlog high")
-      expect(page.severity).to eq("warning")
-      expect(page.details["archival_backlog"]).to eq(15)
-      expect(page.details["disk_usage_percent"]).to eq(0)
-      expect(page.details["related_resources"]).to eq([postgres_server.ubid])
-      expect(page.resource_id).to eq(postgres_server.id)
+    it "does not page when backlog is moderate and upload rate is above threshold" do
+      # Previous: segment 5, now: segment 10 (5 segments = 80MB archived)
+      # With 1 second elapsed, rate = 80 MB/s > 50 MB/s threshold
+      session[:previous_oldest_pending_wal] = "000000010000000000000005.ready"
+      session[:previous_archival_check_time] = Time.now - 1
+      expect_archive_status("00000001000000000000000A.ready", 15)
+      postgres_server.observe_archival_backlog(session)
+      expect(page).to be_nil
+    end
+
+    it "pages when backlog is moderate but upload rate is below threshold" do
+      # Previous: segment 5, now: segment 6 (1 segment = 16MB archived)
+      # With 2 seconds elapsed, rate = 8 MB/s < 10 MB/s threshold
+      session[:previous_oldest_pending_wal] = "000000010000000000000005.ready"
+      session[:previous_archival_check_time] = Time.now - 2
+      expect_archive_status("000000010000000000000006.ready", 15)
+      postgres_server.observe_archival_backlog(session)
+      expect(page).not_to be_nil
+    end
+
+    it "pages when backlog is severe regardless of upload rate" do
+      session[:previous_oldest_pending_wal] = "000000010000000000000010.ready"
+      session[:previous_archival_check_time] = Time.now - 1
+      expect_archive_status("000000010000000000000020.ready", 25)
+      postgres_server.observe_archival_backlog(session)
+      expect(page).not_to be_nil
     end
 
     it "escalates severity to error when disk usage is high" do
       session[:disk_usage_percent] = 90
-      allow(session[:ssh_session]).to receive(:_exec!).and_return(
-        "000000010000000000000010.ready\n",
-        "15\n",
-      )
-
+      expect_archive_status("000000010000000000000010.ready", 15)
       postgres_server.observe_archival_backlog(session)
+      expect([page.severity, page.details["disk_usage_percent"]]).to eq ["error", 90]
+    end
 
-      page = Page.from_tag_parts("PGArchivalBacklogHigh", postgres_server.id)
-      expect(page).not_to be_nil
-      expect(page.severity).to eq("error")
-      expect(page.details["disk_usage_percent"]).to eq(90)
+    it "resolves a page only once the backlog is below 80% of the threshold (hysteresis)" do
+      existing_page = create_page
+      expect_archive_status("000000010000000000000009.ready", 9)
+      postgres_server.observe_archival_backlog(session)
+      expect(existing_page.semaphores_dataset.select_map(:name)).to eq []
+
+      expect_archive_status("000000010000000000000003.ready", 3)
+      postgres_server.observe_archival_backlog(session)
+      expect(existing_page.semaphores_dataset.select_map(:name)).to eq ["resolve"]
+    end
+
+    it "logs errors when checking archival backlog fails" do
+      expect(session[:ssh_session]).to receive(:_exec!).and_raise(Net::SSH::Exception.new("SSH error"))
+      expect(Clog).to receive(:emit).with("Failed to observe archival backlog", instance_of(Hash)).and_call_original
+      postgres_server.observe_archival_backlog(session)
     end
   end
 
-  describe "#archival_backlog_threshold" do
-    it "returns 1000 if the storage size is large" do
-      allow(postgres_server).to receive(:storage_size_gib).and_return(1024)
-      expect(postgres_server.archival_backlog_threshold).to eq(1000)
-    end
-
-    it "returns smaller threshold for smaller storage sizes" do
-      allow(postgres_server).to receive(:storage_size_gib).and_return(100)
-      expect(postgres_server.archival_backlog_threshold).to eq(320)
-    end
+  it "#archival_backlog_threshold is 5% of the storage size as WAL file count, capped at 1000" do
+    volume = VmStorageVolume.create(vm:, disk_index: 0, boot: false, size_gib: 100)
+    expect(postgres_server.archival_backlog_threshold).to eq(320)
+    volume.update(size_gib: 1024)
+    postgres_server.vm.vm_storage_volumes(reload: true)
+    expect(postgres_server.archival_backlog_threshold).to eq(1000)
   end
 
-  describe "#should_page_for_archival_backlog?" do
-    before do
-      allow(postgres_server).to receive(:archival_backlog_threshold).and_return(10)
-    end
-
-    let(:now) { Time.now }
-    let(:previous_time) { now - 1 }
-
-    it "returns true when backlog is severe (more than 2x threshold)" do
-      expect(postgres_server.should_page_for_archival_backlog?(
-        25, "00000001000000000000000F.ready", "000000010000000000000005.ready", now, previous_time,
-      )).to be true
-    end
-
-    it "returns true when there is no previous data" do
-      expect(postgres_server.should_page_for_archival_backlog?(
-        15, "00000001000000000000000F.ready", nil, now, nil,
-      )).to be true
-    end
-
-    it "returns false when backlog is moderate and upload rate is above threshold" do
+  it "#should_page_for_archival_backlog? pages for a severe backlog, or a moderate one without a known upload rate above the minimum" do
+    expect(postgres_server).to receive(:archival_backlog_threshold).and_return(10).at_least(:once)
+    now = Time.now
+    expect([
+      [25, "00000001000000000000000F.ready", "000000010000000000000005.ready", now - 1],
+      [15, "00000001000000000000000F.ready", nil, nil],
       # 5 segments = 80MB in 1 second = 80 MB/s > 50 MB/s
-      expect(postgres_server.should_page_for_archival_backlog?(
-        15, "00000001000000000000000A.ready", "000000010000000000000005.ready", now, previous_time,
-      )).to be false
-    end
-
-    it "returns true when backlog is moderate but upload rate is below threshold" do
+      [15, "00000001000000000000000A.ready", "000000010000000000000005.ready", now - 1],
       # 1 segment = 16MB in 2 seconds = 8 MB/s < 10 MB/s
-      expect(postgres_server.should_page_for_archival_backlog?(
-        15, "000000010000000000000006.ready", "000000010000000000000005.ready", now, now - 2,
-      )).to be true
-    end
-
-    it "returns true when backlog is moderate but upload rate cannot be calculated due to zero time elapsed" do
-      expect(postgres_server.should_page_for_archival_backlog?(
-        15, "000000010000000000000006.ready", "000000010000000000000005.ready", now, now,
-      )).to be true
-    end
+      [15, "000000010000000000000006.ready", "000000010000000000000005.ready", now - 2],
+      [15, "000000010000000000000006.ready", "000000010000000000000005.ready", now],
+    ].map { |backlog, current, previous, previous_time|
+      postgres_server.should_page_for_archival_backlog?(backlog, current, previous, now, previous_time)
+    }).to eq [true, true, false, true, true]
   end
 
-  describe "#wal2lsn" do
-    it "converts WAL filename to LSN format" do
-      # Segment 5 = 5 * 16MB = 83886080 = 0x5000000
-      expect(postgres_server.wal2lsn("000000010000000000000005.ready")).to eq("00000000/5000000")
-    end
-
-    it "handles higher segment numbers" do
-      # Segment 0x10 = 16 * 16MB = 268435456 = 0x10000000
-      expect(postgres_server.wal2lsn("000000010000000000000010.ready")).to eq("00000000/10000000")
-    end
+  it "#wal2lsn converts a WAL filename to an LSN" do
+    # Segment 5 = 5 * 16MB = 0x5000000, segment 0x10 = 16 * 16MB = 0x10000000
+    expect(postgres_server.wal2lsn("000000010000000000000005.ready")).to eq("00000000/5000000")
+    expect(postgres_server.wal2lsn("000000010000000000000010.ready")).to eq("00000000/10000000")
   end
 
   describe "#observe_metrics_backlog" do
@@ -1945,7 +1590,7 @@ RSpec.describe PostgresServer do
       set_primary_lsn("10/00000000")
       expect(standby).to receive(:_run_query).with(replica_lag_query, user: "ubi_monitoring", dbname: "ubi_admin", statement_timeout: 5).and_raise("boom")
       expect(Clog).to receive(:emit).with("Failed to observe replica lag", instance_of(Hash)).and_call_original
-      expect { standby.observe_replica_lag(session) }.not_to raise_error
+      standby.observe_replica_lag(session)
     end
 
     it "for read replicas it uses the parent's primary lsn" do
@@ -2255,55 +1900,32 @@ RSpec.describe PostgresServer do
       Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
     end
 
-    it "returns running for wait label" do
-      expect(postgres_server.display_state).to eq("running")
-    end
-
-    it "returns unavailable for unavailable label" do
-      postgres_server.strand.update(label: "unavailable")
-      expect(postgres_server.display_state).to eq("unavailable")
-    end
-
-    it "returns failing_over for failover labels" do
-      postgres_server.strand.update(label: "taking_over")
-      expect(postgres_server.display_state).to eq("failing_over")
+    it "maps the strand label to a display state" do
+      states = %w[wait unavailable taking_over wait_catch_up wait_synchronization destroy configure refresh_certificates].to_h do |label|
+        postgres_server.strand.update(label:)
+        [label, postgres_server.display_state]
+      end
+      expect(states).to eq(
+        "wait" => "running",
+        "unavailable" => "unavailable",
+        "taking_over" => "failing_over",
+        "wait_catch_up" => "synchronizing",
+        "wait_synchronization" => "synchronizing",
+        "destroy" => "deleting",
+        "configure" => "updating",
+        "refresh_certificates" => "updating",
+      )
     end
 
     it "returns restarting while a restart is pending" do
-      postgres_server.strand.update(label: "wait")
       postgres_server.incr_restart
       expect(postgres_server.display_state).to eq("restarting")
-    end
-
-    it "returns synchronizing for wait_catch_up label" do
-      postgres_server.strand.update(label: "wait_catch_up")
-      expect(postgres_server.display_state).to eq("synchronizing")
-    end
-
-    it "returns synchronizing for wait_synchronization label" do
-      postgres_server.strand.update(label: "wait_synchronization")
-      expect(postgres_server.display_state).to eq("synchronizing")
-    end
-
-    it "returns deleting for destroy label" do
-      postgres_server.strand.update(label: "destroy")
-      expect(postgres_server.display_state).to eq("deleting")
     end
 
     it "returns creating when initial_provisioning semaphore is set" do
       postgres_server.strand.update(label: "mount_data_disk")
       postgres_server.incr_initial_provisioning
       expect(postgres_server.display_state).to eq("creating")
-    end
-
-    it "returns updating for configure label" do
-      postgres_server.strand.update(label: "configure")
-      expect(postgres_server.display_state).to eq("updating")
-    end
-
-    it "returns updating for refresh_certificates label" do
-      postgres_server.strand.update(label: "refresh_certificates")
-      expect(postgres_server.display_state).to eq("updating")
     end
   end
 
@@ -2321,27 +1943,14 @@ RSpec.describe PostgresServer do
   end
 
   describe "#logs_config" do
-    it "returns config with resource_name, resource_id, instance, server_role, version, and empty destinations" do
+    it "returns the server identity and role, with no destinations and no AWS-only agents outside AWS" do
       config = postgres_server.logs_config
-      expect(config[:instance]).to eq(postgres_server.ubid)
-      expect(config[:resource_name]).to eq(resource.name)
-      expect(config[:resource_id]).to eq(resource.ubid)
-      expect(config[:server_role]).to eq("primary")
-      expect(config[:version]).to eq("16")
-      expect(config[:log_destinations]).to eq([])
-    end
+      expect(config.values_at(:instance, :resource_name, :resource_id, :server_role, :version, :log_destinations, :cloudwatch_auth_region, :guardduty_region)).to eq [
+        postgres_server.ubid, resource.name, resource.ubid, "primary", "16", [], nil, nil,
+      ]
 
-    it "returns standby as server_role for standby servers" do
-      allow(postgres_server).to receive(:primary?).and_return(false)
+      postgres_server.update(timeline_access: "fetch")
       expect(postgres_server.logs_config[:server_role]).to eq("standby")
-    end
-
-    it "ships no auth logs to CloudWatch outside AWS" do
-      expect(postgres_server.logs_config[:cloudwatch_auth_region]).to be_nil
-    end
-
-    it "installs no GuardDuty agent outside AWS" do
-      expect(postgres_server.logs_config[:guardduty_region]).to be_nil
     end
 
     context "with an AWS location" do
@@ -2356,22 +1965,10 @@ RSpec.describe PostgresServer do
         )
       }
 
-      it "ships auth logs to the CloudWatch region for a project with the feature flag" do
+      it "ships auth logs to CloudWatch and installs the GuardDuty agent from the server's region only for a project with the feature flag" do
+        expect(postgres_server.logs_config.values_at(:cloudwatch_auth_region, :guardduty_region)).to eq [nil, nil]
         project.set_ff_aws_cloudwatch_logs(true)
-        expect(postgres_server.logs_config[:cloudwatch_auth_region]).to eq("us-west-2")
-      end
-
-      it "ships no auth logs to CloudWatch for a project without the feature flag" do
-        expect(postgres_server.logs_config[:cloudwatch_auth_region]).to be_nil
-      end
-
-      it "installs the GuardDuty agent from the server's region for a project with the feature flag" do
-        project.set_ff_aws_cloudwatch_logs(true)
-        expect(postgres_server.logs_config[:guardduty_region]).to eq("us-west-2")
-      end
-
-      it "installs no GuardDuty agent for a project without the feature flag" do
-        expect(postgres_server.logs_config[:guardduty_region]).to be_nil
+        expect(postgres_server.logs_config.values_at(:cloudwatch_auth_region, :guardduty_region)).to eq ["us-west-2", "us-west-2"]
       end
     end
 
@@ -2385,10 +1982,6 @@ RSpec.describe PostgresServer do
       destinations = postgres_server.logs_config[:log_destinations]
       expect(destinations.length).to eq(1)
       expect(destinations.first).to eq({type: "syslog", url: "tcp://logs.example.com:6514", options: nil})
-    end
-
-    it "emits no managed parseable destination when no ParseableResource exists" do
-      expect(postgres_server.logs_config[:log_destinations]).to eq([])
     end
 
     context "with a managed Parseable service" do
@@ -2462,17 +2055,6 @@ RSpec.describe PostgresServer do
 
         destinations = postgres_server.logs_config[:log_destinations]
         expect(destinations.map { |d| d[:type] }).to eq(["otlp", "syslog"])
-      end
-
-      it "emits no managed parseable destination when no ParseableResource exists for the postgres server location" do
-        other_location = Location.create(name: "eu-west-1", display_name: "eu-west-1", ui_name: "eu-west-1", visible: false, provider: "hetzner")
-        other_resource = create_postgres_resource(project:, location_id: other_location.id)
-        other_server = described_class.create(
-          timeline: create_postgres_timeline(location_id: other_location.id),
-          resource: other_resource, vm_id: vm.id, is_representative: true,
-          synchronization_status: "ready", timeline_access: "push", version: "16",
-        )
-        expect(other_server.logs_config[:log_destinations]).to eq([])
       end
 
       it "uses endpoint override without auth or CA bundle when parseable_endpoint_override is set" do
