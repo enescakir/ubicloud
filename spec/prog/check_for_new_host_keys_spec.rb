@@ -20,7 +20,7 @@ RSpec.describe Prog::CheckForNewHostKeys do
         Sshable.create_with_id(id, host: "host#{i}", host_keys: (i == 1) ? nil : ["ssh-ed25519 AAAA#{i}"])
       end
       checked = []
-      allow(prog).to receive(:next_sshable).and_wrap_original do |m|
+      expect(prog).to receive(:next_sshable).thrice.and_wrap_original do |m|
         m.call&.tap do |sshable|
           expect(sshable).to receive(:check_for_new_host_keys) { checked << sshable.id }
         end
