@@ -190,7 +190,7 @@ RSpec.describe Clover, "location-credential" do
         visit "#{project_wo_permissions.path}#{private_location_wo_permission.path}"
         expect(page.title).to eq "Ubicloud - aws-us-west-1"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
 
       it "can not delete aws location credential when there are active resources" do
