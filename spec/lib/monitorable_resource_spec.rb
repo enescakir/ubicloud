@@ -66,15 +66,17 @@ RSpec.describe MonitorableResource do
 
     describe "ssh failure tracking" do
       let(:now) { Time.now }
+      let(:clock) { [now] }
 
       before do
-        allow(Time).to receive(:now).and_return(now)
+        clock
+        allow(Time).to receive(:now) { clock[0] }
       end
 
       it "re-raises Sequel::DatabaseDisconnectError without paging" do
         expect(postgres_server).to receive(:reload).and_raise(Sequel::DatabaseDisconnectError).twice
         expect { r_w_event_loop.open_resource_session }.to raise_error(Sequel::DatabaseDisconnectError)
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
         expect { r_w_event_loop.open_resource_session }.to raise_error(Sequel::DatabaseDisconnectError)
         expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
       end
@@ -82,7 +84,7 @@ RSpec.describe MonitorableResource do
       it "does not page if failure has not persisted past the threshold" do
         expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).twice
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD - 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD - 1
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
       end
@@ -92,7 +94,7 @@ RSpec.describe MonitorableResource do
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
 
         past = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
-        allow(Time).to receive(:now).and_return(past)
+        clock[0] = past
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         page = Page.from_tag_parts("SshableUnreachable", postgres_server.id)
         expect(page.summary).to start_with("#{postgres_server.ubid} sshable unreachable for ")
@@ -100,7 +102,7 @@ RSpec.describe MonitorableResource do
         expect(page.resource_id).to eq(postgres_server.id)
         summary = page.summary
 
-        allow(Time).to receive(:now).and_return(past + 10)
+        clock[0] = past + 10
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         expect(page.reload.summary).to eq(summary)
 
@@ -112,11 +114,11 @@ RSpec.describe MonitorableResource do
       it "tolerates the page being absent on recovery" do
         expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).twice
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         Page.from_tag_parts("SshableUnreachable", postgres_server.id).destroy
         expect(postgres_server).to receive(:init_health_monitor_session).and_return("session")
-        expect { r_w_event_loop.open_resource_session }.not_to raise_error
+        r_w_event_loop.open_resource_session
       end
 
       it "clears tracking on success without raising or resolving a page" do
@@ -128,15 +130,15 @@ RSpec.describe MonitorableResource do
       end
 
       it "waits for the resource's own threshold before paging" do
-        allow(postgres_server).to receive(:open_session_failure_page_threshold).and_return(described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD * 2)
+        expect(postgres_server).to receive(:open_session_failure_page_threshold).and_return(described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD * 2).at_least(:once)
         expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).exactly(3).times
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
 
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
 
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD * 2 + 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD * 2 + 1
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).not_to be_nil
       end
@@ -144,16 +146,16 @@ RSpec.describe MonitorableResource do
       it "uses the default threshold for resources that do not override it" do
         expect(vm_host).to receive(:init_health_monitor_session).and_raise(IOError).twice
         expect { r_without_event_loop.open_resource_session }.to raise_error(IOError)
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
         expect { r_without_event_loop.open_resource_session }.to raise_error(IOError)
         expect(Page.from_tag_parts("SshableUnreachable", vm_host.id)).not_to be_nil
       end
 
       it "does not page if resource opts out via page_on_sshable_failure?" do
-        allow(postgres_server).to receive(:page_on_sshable_failure?).and_return(false)
+        expect(postgres_server).to receive(:page_on_sshable_failure?).and_return(false).at_least(:once)
         expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).twice
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
-        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        clock[0] = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
         expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
         expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
       end
@@ -271,7 +273,7 @@ RSpec.describe MonitorableResource do
       r_without_event_loop.instance_variable_set(:@session, session)
       expect(vm_host).to receive(:check_pulse).and_raise(StandardError)
       expect(Clog).to receive(:emit).and_call_original
-      expect { r_without_event_loop.check_pulse }.not_to raise_error
+      r_without_event_loop.check_pulse
     end
   end
 
@@ -296,7 +298,7 @@ RSpec.describe MonitorableResource do
     it "swallows exception and logs it if check_pulse fails" do
       expect(postgres_server).to receive(:check_pulse).and_raise(StandardError)
       expect(Clog).to receive(:emit).and_call_original
-      expect { r_w_event_loop.check_pulse }.not_to raise_error
+      r_w_event_loop.check_pulse
     end
 
     it "does not log the pulse if reading is up and reading_rpt is not every 20th and reading_rpt is large enough" do
@@ -347,7 +349,7 @@ RSpec.describe MonitorableResource do
         session[:last_pulse] = Time.now - 1
         expect(postgres_server).to receive(:check_pulse).and_raise(ex)
         expect(Clog).to receive(:emit).and_call_original
-        expect { r_w_event_loop.check_pulse }.not_to raise_error
+        r_w_event_loop.check_pulse
       end
 
       it "is up on a retry on a stale connection that works the second time" do
@@ -370,14 +372,14 @@ RSpec.describe MonitorableResource do
         expect(session).to receive(:merge!).with(second_session)
         expect(postgres_server).to receive(:check_pulse).and_return(ex)
         expect(Clog).to receive(:emit).and_call_original
-        expect { r_w_event_loop.check_pulse }.not_to raise_error
+        r_w_event_loop.check_pulse
       end
 
       it "is down for a matching exception without a matching message" do
         session[:last_pulse] = Time.now - 10
         expect(postgres_server).to receive(:check_pulse).and_raise(ex.class.new("something else"))
         expect(Clog).to receive(:emit).and_call_original
-        expect { r_w_event_loop.check_pulse }.not_to raise_error
+        r_w_event_loop.check_pulse
       end
 
       it "continues stale retry even if shutdown! raises" do
