@@ -27,7 +27,7 @@ RSpec.describe ResourceDiscount do
     end
 
     it "allows resource_id when resource_type is set" do
-      expect { create(resource_id: project.id, resource_type: "VmVCpu") }.not_to raise_error
+      expect(create(resource_id: project.id, resource_type: "VmVCpu")).to exist
     end
 
     it "rejects discount_percent above 100" do
@@ -73,40 +73,34 @@ RSpec.describe ResourceDiscount do
     end
 
     it "accepts UTC month-start active_from with NULL active_to" do
-      expect { create(active_from: Time.utc(2026, 1, 1)) }.not_to raise_error
+      expect(create(active_from: Time.utc(2026, 1, 1))).to exist
     end
   end
 
   describe "overlap trigger" do
     it "allows same-pattern rules with disjoint time ranges" do
       create(resource_type: "VmVCpu", active_from: Time.utc(2026, 1, 1), active_to: Time.utc(2026, 2, 1))
-      expect {
-        create(resource_type: "VmVCpu", active_from: Time.utc(2026, 3, 1), active_to: Time.utc(2026, 4, 1))
-      }.not_to raise_error
+      expect(create(resource_type: "VmVCpu", active_from: Time.utc(2026, 3, 1), active_to: Time.utc(2026, 4, 1))).to exist
     end
 
     it "allows adjacent time ranges due to '[)' semantics" do
       create(resource_type: "VmVCpu", active_from: Time.utc(2026, 1, 1), active_to: Time.utc(2026, 2, 1))
-      expect {
-        create(resource_type: "VmVCpu", active_from: Time.utc(2026, 2, 1), active_to: Time.utc(2026, 3, 1))
-      }.not_to raise_error
+      expect(create(resource_type: "VmVCpu", active_from: Time.utc(2026, 2, 1), active_to: Time.utc(2026, 3, 1))).to exist
     end
 
     it "allows rules with non-overlapping concrete match values" do
       create(resource_type: "VmVCpu")
-      expect { create(resource_type: "PostgresVCpu") }.not_to raise_error
+      expect(create(resource_type: "PostgresVCpu")).to exist
     end
 
     it "allows rules on different projects even if they'd otherwise conflict" do
       create(resource_type: "VmVCpu")
-      expect {
-        described_class.create(
-          project_id: other_project.id,
-          discount_percent: 10,
-          active_from: Time.utc(2026, 1, 1),
-          resource_type: "VmVCpu",
-        )
-      }.not_to raise_error
+      expect(described_class.create(
+        project_id: other_project.id,
+        discount_percent: 10,
+        active_from: Time.utc(2026, 1, 1),
+        resource_type: "VmVCpu",
+      )).to exist
     end
 
     it "rejects two wildcard rules for the same project" do
@@ -135,7 +129,7 @@ RSpec.describe ResourceDiscount do
 
     it "allows rules with different byoc values" do
       create(resource_type: "VmVCpu", byoc: true)
-      expect { create(resource_type: "VmVCpu", byoc: false) }.not_to raise_error
+      expect(create(resource_type: "VmVCpu", byoc: false)).to exist
     end
 
     it "rejects byoc wildcard overlapping with concrete byoc" do
@@ -147,7 +141,8 @@ RSpec.describe ResourceDiscount do
       rd = create(resource_type: "VmVCpu", active_from: Time.utc(2026, 1, 1), active_to: Time.utc(2026, 2, 1))
       create(resource_type: "VmVCpu", active_from: Time.utc(2026, 3, 1), active_to: Time.utc(2026, 4, 1))
 
-      expect { rd.update(discount_percent: 25) }.not_to raise_error
+      rd.update(discount_percent: 25)
+      expect(rd.reload.discount_percent).to eq(25)
     end
   end
 
