@@ -332,7 +332,7 @@ RSpec.describe Clover, "private subnet" do
         expect(private_subnet.reload.connected_subnets.count).to eq(0)
         expect(page.title).to eq "Ubicloud - dummy-ps-1"
         expect(page).to have_flash_error "Subnet to be connected not found"
-        expect { select "dummy-ps-2" }.to raise_error(Capybara::ElementNotFound)
+        expect(page).to have_no_select(with_options: ["dummy-ps-2"])
       end
 
       it "cannot disconnect connected subnet without access to connected subnet" do
@@ -371,7 +371,7 @@ RSpec.describe Clover, "private subnet" do
         expect(page.title).to eq "Ubicloud - Forbidden"
 
         visit "#{project.path}#{private_subnet.path}/networking"
-        expect { click_button "Connect" }.to raise_error(Capybara::ElementNotFound)
+        expect(page).to have_no_button "Connect"
       end
 
       it "cannot disconnect connected subnet without access to current subnet" do
@@ -438,7 +438,7 @@ RSpec.describe Clover, "private subnet" do
         visit "#{project_wo_permissions.path}#{ps_wo_permission.path}/settings"
         expect(page.title).to eq "Ubicloud - dummy-ps-2"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
 
       it "can not delete private subnet when there are active VMs" do
