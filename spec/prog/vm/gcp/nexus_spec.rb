@@ -187,8 +187,8 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
         expect(args[:instance_resource].labels.to_h).to eq("ubicloud" => "555666777")
 
         ni = args[:instance_resource].network_interfaces.first
-        expect(ni.network).to eq("projects/test-gcp-project/global/networks/ubicloud-#{project.ubid}-#{location.ubid}")
-        expect(ni.subnetwork).to include("subnetworks/ubicloud-")
+        expect(ni.network).to eq("projects/test-gcp-project/global/networks/#{nic.private_subnet.gcp_vpc.name}")
+        expect(ni.subnetwork).to end_with("subnetworks/ubicloud-#{nic.private_subnet.ubid}")
         expect(ni.network_i_p).to eq(vm.user_nic.private_ipv4.network.to_s)
         expect(ni.stack_type).to eq("IPV4_IPV6")
         expect(ni.ipv6_access_configs.first.name).to eq("External IPv6")
@@ -200,7 +200,7 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       expect(st.stack.first.dig("create_vm", "name")).to eq("op-12345")
     end
 
-    it "selects a zone suffix and persists it in VM strand frame" do
+    it "selects a zone suffix, persists it in VM strand frame, and creates a VmGcpResource row matching it" do
       nic.strand.update(label: "wait")
       ensure_nic_gcp_resource(nic)
 
@@ -208,7 +208,9 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       expect(compute_client).to receive(:insert).and_return(op)
 
       expect { nx.start }.to hop("wait_create_op")
-      expect(st.stack.first["gcp_zone_suffix"]).to match(/\A[abc]\z/)
+      suffix = st.stack.first["gcp_zone_suffix"]
+      expect(suffix).to match(/\A[abc]\z/)
+      expect(VmGcpResource[vm.id].location_az).to eq(LocationAz[location_id: location.id, az: suffix])
     end
 
     it "excludes zones from unsupported_azs on initial zone selection" do
@@ -243,22 +245,6 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       expect(compute_client).to receive(:insert) do |args|
         ac = args[:instance_resource].network_interfaces.first.access_configs.first
         expect(ac.nat_i_p).to eq("35.192.0.99")
-        op
-      end
-
-      expect { nx.start }.to hop("wait_create_op")
-    end
-
-    it "uses network config from NicGcpResource" do
-      nic.strand.update(label: "wait")
-      ensure_nic_gcp_resource(nic)
-
-      op = instance_double(Gapic::GenericLRO::Operation, name: "op-net")
-      expect(compute_client).to receive(:insert) do |args|
-        ni = args[:instance_resource].network_interfaces.first
-        ps = nic.private_subnet
-        expect(ni.network).to include(ps.gcp_vpc.name)
-        expect(ni.subnetwork).to include("ubicloud-#{ps.ubid}")
         op
       end
 
@@ -449,20 +435,6 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       expect(captured).not_to include('#{')
       expect(YAML.safe_load(captured)["users"].last["ssh_authorized_keys"])
         .to eq(vm.sshable.keys.map(&:public_key))
-    end
-
-    it "creates a VmGcpResource row matching the chosen zone on first entry" do
-      nic.strand.update(label: "wait")
-      ensure_nic_gcp_resource(nic)
-
-      op = instance_double(Gapic::GenericLRO::Operation, name: "op-vmgcp")
-      expect(compute_client).to receive(:insert).and_return(op)
-
-      expect { nx.start }.to hop("wait_create_op")
-      suffix = st.stack.first["gcp_zone_suffix"]
-      resource = VmGcpResource[vm.id]
-      expect(resource).not_to be_nil
-      expect(resource.location_az).to eq(LocationAz[location_id: location.id, az: suffix])
     end
 
     it "skips re-creating VmGcpResource if one already exists at first entry" do
@@ -868,54 +840,23 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
       expect(vm.ephemeral_net6).to be_nil
     end
 
-    it "naps if the instance is in STAGING state" do
-      instance = Google::Cloud::Compute::V1::Instance.new(
-        status: "STAGING",
-        network_interfaces: [],
-      )
-
-      expect(compute_client).to receive(:get).and_return(instance)
-      expect { nx.wait_instance_created }.to nap(5)
+    it "naps if the instance is in STAGING or PROVISIONING state" do
+      instances = %w[STAGING PROVISIONING].map { Google::Cloud::Compute::V1::Instance.new(status: it, network_interfaces: []) }
+      expect(compute_client).to receive(:get).and_return(*instances).twice
+      2.times { expect { nx.wait_instance_created }.to nap(5) }
     end
 
-    it "naps if the instance is in PROVISIONING state" do
-      instance = Google::Cloud::Compute::V1::Instance.new(
-        status: "PROVISIONING",
-        network_interfaces: [],
-      )
-
-      expect(compute_client).to receive(:get).and_return(instance)
-      expect { nx.wait_instance_created }.to nap(5)
-    end
-
-    it "pages and naps if the instance enters TERMINATED state" do
-      instance = Google::Cloud::Compute::V1::Instance.new(
-        status: "TERMINATED",
-        network_interfaces: [],
-      )
-
-      expect(compute_client).to receive(:get).and_return(instance)
-      expect(nx).to receive(:unregister_deadline).with("wait")
-      expect { nx.wait_instance_created }.to nap(6 * 60 * 60)
-      page = Page.from_tag_parts("GceProvisionTerminal", vm.ubid, "TERMINATED")
-      expect(page.summary).to eq("GCE VM #{vm.ubid} entered terminal state TERMINATED during provisioning")
-      expect(page.details["related_resources"]).to eq([vm.ubid])
-      expect(page.resource_id).to eq(vm.id)
-    end
-
-    it "pages and naps if the instance enters SUSPENDED state" do
-      instance = Google::Cloud::Compute::V1::Instance.new(
-        status: "SUSPENDED",
-        network_interfaces: [],
-      )
-
-      expect(compute_client).to receive(:get).and_return(instance)
-      expect(nx).to receive(:unregister_deadline).with("wait")
-      expect { nx.wait_instance_created }.to nap(6 * 60 * 60)
-      page = Page.from_tag_parts("GceProvisionTerminal", vm.ubid, "SUSPENDED")
-      expect(page.summary).to eq("GCE VM #{vm.ubid} entered terminal state SUSPENDED during provisioning")
-      expect(page.details["related_resources"]).to eq([vm.ubid])
-      expect(page.resource_id).to eq(vm.id)
+    it "pages and naps if the instance enters TERMINATED or SUSPENDED state" do
+      statuses = %w[TERMINATED SUSPENDED]
+      expect(compute_client).to receive(:get).and_return(*statuses.map { Google::Cloud::Compute::V1::Instance.new(status: it, network_interfaces: []) }).twice
+      expect(nx).to receive(:unregister_deadline).with("wait").twice
+      statuses.each do |status|
+        expect { nx.wait_instance_created }.to nap(6 * 60 * 60)
+        page = Page.from_tag_parts("GceProvisionTerminal", vm.ubid, status)
+        expect([page.summary, page.details["related_resources"], page.resource_id]).to eq [
+          "GCE VM #{vm.ubid} entered terminal state #{status} during provisioning", [vm.ubid], vm.id,
+        ]
+      end
     end
   end
 
@@ -1220,19 +1161,12 @@ RSpec.describe Prog::Vm::Gcp::Nexus do
         expect(nx.send(:gce_source_image)).to eq("projects/my-project/global/images/my-image")
       end
 
-      it "maps ubuntu-noble to the correct GCE family for x64" do
-        nx.vm.update(boot_image: "ubuntu-noble", arch: "x64")
-        expect(nx.send(:gce_source_image)).to eq("projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64")
-      end
-
-      it "maps ubuntu-noble to the correct GCE family for arm64" do
-        nx.vm.update(boot_image: "ubuntu-noble", arch: "arm64")
-        expect(nx.send(:gce_source_image)).to eq("projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-arm64")
-      end
-
-      it "maps ubuntu-jammy to the correct GCE family for x64" do
-        nx.vm.update(boot_image: "ubuntu-jammy", arch: "x64")
-        expect(nx.send(:gce_source_image)).to eq("projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts-amd64")
+      it "maps ubuntu boot images to the correct GCE family for the arch" do
+        images = [["ubuntu-noble", "x64"], ["ubuntu-noble", "arm64"], ["ubuntu-jammy", "x64"]].map do |boot_image, arch|
+          nx.vm.update(boot_image:, arch:)
+          nx.send(:gce_source_image)
+        end
+        expect(images).to eq %w[ubuntu-2404-lts-amd64 ubuntu-2404-lts-arm64 ubuntu-2204-lts-amd64].map { "projects/ubuntu-os-cloud/global/images/family/#{it}" }
       end
 
       it "raises for unknown boot images" do
