@@ -30,7 +30,7 @@ RSpec.describe Clover, "billing" do
 
     visit project.path
     within "#desktop-menu" do
-      expect { click_link "Billing" }.to raise_error Capybara::ElementNotFound
+      expect(page).to have_no_link "Billing"
     end
     expect(page.title).to eq("Ubicloud - #{project.name}")
 
