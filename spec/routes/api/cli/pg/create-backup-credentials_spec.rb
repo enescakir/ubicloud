@@ -22,7 +22,7 @@ RSpec.describe Clover, "cli pg create-backup-credentials" do
   it "shows credentials for metal databases" do
     @project.set_ff_postgres_backup_download_minio(true)
     create_minio_cluster_for_blob_storage
-    allow(Config).to receive(:minio_service_project_id).and_return(Config.postgres_service_project_id)
+    expect(Config).to receive(:minio_service_project_id).and_return(Config.postgres_service_project_id)
     expiration = Time.now.utc + 36 * 60 * 60
     expect(Minio::Client).to receive(:new).and_return(instance_double(Minio::Client, assume_role: {access_key_id: "AKID", secret_access_key: "SECRET", session_token: "TOKEN", expiration:}))
 
