@@ -184,7 +184,7 @@ LOCK
 
     it "can reset caches even if session fails while closing" do
       sess = Net::SSH::Connection::Session.allocate
-      allow(sess).to receive(:transport).and_return(ssh_session.transport)
+      expect(sess).to receive(:transport).and_return(ssh_session.transport)
       expect(sess).to receive(:close).and_raise Sshable::SshError.new("bogus", "", "", nil, nil)
       expect(Net::SSH).to receive(:start).and_return sess
       sa.connect
@@ -543,7 +543,7 @@ LOCK
     it "can run a command" do
       [false, true].each do |repl_value|
         [false, true].each do |log_value|
-          allow(described_class).to receive(:repl?).and_return(repl_value)
+          expect(described_class).to receive(:repl?).and_return(repl_value).exactly(log_value ? 3 : 2).times
           if repl_value
             # Note that in the REPL, stdout and stderr get multiplexed
             # into stderr in real time, packet by packet.
