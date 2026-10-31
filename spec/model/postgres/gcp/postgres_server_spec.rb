@@ -530,21 +530,21 @@ RSpec.describe PostgresServer do
         key = instance_double(Google::Apis::IamV1::ServiceAccountKey,
           private_key_data: '{"type":"service_account","private_key":"new"}'.b)
 
-        allow(location_credential_gcp).to receive_messages(iam_client:, storage_client:)
-        allow(iam_client).to receive(:get_project_service_account).and_raise(Google::Apis::ClientError.new("Not Found", status_code: 404))
-        allow(iam_client).to receive_messages(create_service_account: sa, create_service_account_key: key)
-        allow(iam_client).to receive(:get_project_service_account_iam_policy).and_return(Google::Apis::IamV1::Policy.new(bindings: []))
-        allow(iam_client).to receive(:set_service_account_iam_policy)
-        allow(timeline).to receive(:create_bucket)
+        expect(location_credential_gcp).to receive_messages(iam_client:, storage_client:)
+        expect(iam_client).to receive(:get_project_service_account).and_raise(Google::Apis::ClientError.new("Not Found", status_code: 404))
+        expect(iam_client).to receive_messages(create_service_account: sa, create_service_account_key: key)
+        expect(iam_client).to receive(:get_project_service_account_iam_policy).and_return(Google::Apis::IamV1::Policy.new(bindings: []))
+        expect(iam_client).to receive(:set_service_account_iam_policy)
+        expect(timeline).to receive(:create_bucket)
 
         bucket = instance_double(Google::Cloud::Storage::Bucket)
         policy = instance_double(Google::Cloud::Storage::PolicyV3)
         bindings = instance_double(Google::Cloud::Storage::PolicyV3::Bindings)
-        allow(storage_client).to receive(:bucket).and_return(bucket)
-        allow(bucket).to receive(:policy).and_return(policy)
-        allow(policy).to receive(:bindings).and_return(bindings)
-        allow(bindings).to receive(:insert)
-        allow(bucket).to receive(:policy=)
+        expect(storage_client).to receive(:bucket).and_return(bucket)
+        expect(bucket).to receive(:policy).and_return(policy)
+        expect(policy).to receive(:bindings).and_return(bindings)
+        expect(bindings).to receive(:insert)
+        expect(bucket).to receive(:policy=)
 
         expect(iam_client).not_to receive(:delete_project_service_account)
 
