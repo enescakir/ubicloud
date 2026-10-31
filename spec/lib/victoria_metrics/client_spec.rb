@@ -150,7 +150,8 @@ RSpec.describe VictoriaMetrics::Client do
       end
 
       it "sends a POST request with correct parameters" do
-        expect { client.import_prometheus(scrape) }.not_to raise_error
+        client.import_prometheus(scrape)
+        expect(a_request(:post, "#{endpoint}/api/v1/import/prometheus?timestamp=#{timestamp_msec}")).to have_been_made.once
       end
     end
 
@@ -170,7 +171,8 @@ RSpec.describe VictoriaMetrics::Client do
       end
 
       it "sends a POST request with correct parameters and extra labels" do
-        expect { client.import_prometheus(scrape, extra_labels) }.not_to raise_error
+        client.import_prometheus(scrape, extra_labels)
+        expect(a_request(:post, "#{endpoint}/api/v1/import/prometheus?timestamp=#{timestamp_msec}&extra_label=env%3Dproduction&extra_label=region%3Dus-west")).to have_been_made.once
       end
     end
 
