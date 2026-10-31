@@ -37,7 +37,7 @@ RSpec.describe Hosting::LeasewebApis do
     end
 
     it "sends the eu org's key" do
-      allow(Config).to receive(:leaseweb_eu_api_key).and_return("eu-key")
+      expect(Config).to receive(:leaseweb_eu_api_key).and_return("eu-key")
       stub_request(:get, "https://api.leaseweb.com/bareMetals/v2/servers/123").with(headers: {"X-Lsw-Auth" => "eu-key"})
         .to_return(status: 200, body: JSON.generate(location: {site: "FRA-10", suite: "2", rack: "11"}))
       expect(leaseweb_eu_apis.pull_data_center).to eq("FRA-10-2-11")
