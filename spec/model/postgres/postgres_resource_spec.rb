@@ -66,87 +66,65 @@ RSpec.describe PostgresResource do
     expect(postgres_resource.uses_publicly_signed_certificates?).to be false
   end
 
-  it "returns connection string without ubid qualifier" do
-    expect(postgres_resource).to receive(:dns_zone).and_return("something").at_least(:once)
-    expect(postgres_resource).to receive(:hostname_version).and_return("v1").at_least(:once)
-    expect(postgres_resource.connection_string).to eq("postgres://postgres:dummy-password@pg-name.postgres.ubicloud.com:5432/postgres?sslmode=require&channel_binding=require")
+  describe "with the postgres service DNS zones" do
+    let(:service_project) { Project.create(name: "pg-service-project") }
+
+    before do
+      allow(Config).to receive(:postgres_service_project_id).and_return(service_project.id)
+      DnsZone.create(project_id: service_project.id, name: "postgres.ubicloud.com")
+      DnsZone.create(project_id: service_project.id, name: "pg.ubicloud.app")
+    end
+
+    it "returns connection strings qualified by ubid from hostname version v2" do
+      postgres_resource.update(hostname_version: "v1")
+      expect(postgres_resource.connection_string).to eq("postgres://postgres:dummy-password@pg-name.postgres.ubicloud.com:5432/postgres?sslmode=require&channel_binding=require")
+      postgres_resource.update(hostname_version: "v2")
+      expect([postgres_resource.connection_string, postgres_resource.private_connection_string]).to eq [
+        "postgres://postgres:dummy-password@pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com:5432/postgres?sslmode=require&channel_binding=require",
+        "postgres://postgres:dummy-password@private.pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com:5432/postgres?sslmode=require&channel_binding=require",
+      ]
+    end
+
+    it "returns connection strings for publicly signed certificates with hostname version v3" do
+      expect(Config).to receive(:acme_email).and_return("acme@example.com").at_least(:once)
+      postgres_resource.update(hostname_version: "v3")
+      expect([postgres_resource.connection_string, postgres_resource.private_connection_string]).to eq [
+        "postgres://postgres:dummy-password@pg-name.#{postgres_resource.ubid}.pg.ubicloud.app:5432/postgres?sslmode=verify-full&channel_binding=require&sslrootcert=system",
+        "postgres://postgres:dummy-password@pg-name.#{postgres_resource.ubid}.private.pg.ubicloud.app:5432/postgres?sslmode=verify-full&channel_binding=require&sslrootcert=system",
+      ]
+    end
+
+    it "returns replication_connection_string with the private hostname, using the server CA only when root certs are set" do
+      params = "sslcert=/etc/ssl/certs/client.crt&sslkey=/etc/ssl/certs/client.key&sslmode=verify-full&dbname=postgres&application_name=pgubidstandby&tcp_user_timeout=30000"
+      strings = [["v1", nil], ["v2", "rc"], ["v3", nil]].map do |hostname_version, root_cert|
+        postgres_resource.update(hostname_version:, root_cert_1: root_cert, root_cert_2: root_cert)
+        described_class[postgres_resource.id].replication_connection_string(application_name: "pgubidstandby")
+      end
+      expect(strings).to eq [
+        "postgres://ubi_replication@private.pg-name.postgres.ubicloud.com?sslrootcert=system&#{params}",
+        "postgres://ubi_replication@private.pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com?sslrootcert=/etc/ssl/certs/server-ca.crt&#{params}",
+        "postgres://ubi_replication@pg-name.#{postgres_resource.ubid}.private.pg.ubicloud.app?sslrootcert=system&#{params}",
+      ]
+    end
   end
 
-  it "returns connection string with ubid qualifier" do
-    postgres_resource.update(hostname_version: "v2")
-    expect(postgres_resource).to receive(:dns_zone).and_return("something").at_least(:once)
-    expect(postgres_resource.connection_string).to eq("postgres://postgres:dummy-password@pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com:5432/postgres?sslmode=require&channel_binding=require")
-  end
+  describe "without a postgres service DNS zone" do
+    before do
+      vm = create_hosted_vm(project, private_subnet, "pg-vm")
+      PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id, is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
+      AssignedVmAddress.create(dst_vm_id: vm.id, ip: "1.2.3.4/32")
+      vm.nics.first.update(private_ipv4: "172.0.0.9/32")
+    end
 
-  it "returns connection string for publicly signed certificates" do
-    postgres_resource.update(hostname_version: "v3")
-    postgres_project = Project.create(name: "pg-service-project")
-    expect(Config).to receive(:postgres_service_project_id).and_return(postgres_project.id)
-    DnsZone.create(project_id: postgres_project.id, name: "pg.ubicloud.app")
-    expect(Config).to receive(:acme_email).and_return("acme@example.com")
-    expect(postgres_resource.connection_string).to eq("postgres://postgres:dummy-password@pg-name.#{postgres_resource.ubid}.pg.ubicloud.app:5432/postgres?sslmode=verify-full&channel_binding=require&sslrootcert=system")
-  end
-
-  it "returns private connection string with ubid qualifier" do
-    postgres_resource.update(hostname_version: "v2")
-    expect(postgres_resource).to receive(:dns_zone).and_return("something").at_least(:once)
-    expect(postgres_resource.private_connection_string).to eq("postgres://postgres:dummy-password@private.pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com:5432/postgres?sslmode=require&channel_binding=require")
-  end
-
-  it "returns private connection string for publicly signed certificates" do
-    postgres_resource.update(hostname_version: "v3")
-    postgres_project = Project.create(name: "pg-service-project")
-    expect(Config).to receive(:postgres_service_project_id).and_return(postgres_project.id)
-    DnsZone.create(project_id: postgres_project.id, name: "pg.ubicloud.app")
-    expect(Config).to receive(:acme_email).and_return("acme@example.com")
-    expect(postgres_resource.private_connection_string).to eq("postgres://postgres:dummy-password@pg-name.#{postgres_resource.ubid}.private.pg.ubicloud.app:5432/postgres?sslmode=verify-full&channel_binding=require&sslrootcert=system")
-  end
-
-  it "returns connection string with ip address if config is not set" do
-    vm = create_hosted_vm(project, private_subnet, "pg-vm")
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id, is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
-    AssignedVmAddress.create(dst_vm_id: vm.id, ip: "1.2.3.4/32")
-    expect(postgres_resource.connection_string).to eq("postgres://postgres:dummy-password@1.2.3.4:5432/postgres?sslmode=require&channel_binding=require")
-  end
-
-  it "returns replication_connection_string for hostname version v1" do
-    postgres_resource.update(hostname_version: "v1")
-    expect(postgres_resource).to receive(:dns_zone).and_return(instance_double(DnsZone)).at_least(:once)
-    s = postgres_resource.replication_connection_string(application_name: "pgubidstandby")
-    expect(s).to include("ubi_replication@private.pg-name.postgres.ubicloud.com", "application_name=pgubidstandby", "sslcert=/etc/ssl/certs/client.crt", "tcp_user_timeout=30000")
-    postgres_resource.set(root_cert_1: "rc1", root_cert_2: "rc2")
-    s = postgres_resource.replication_connection_string(application_name: "pgubidstandby")
-    expect(s).to include("ubi_replication@private.pg-name.postgres.ubicloud.com", "application_name=pgubidstandby", "sslcert=/etc/ssl/certs/client.crt", "tcp_user_timeout=30000", "sslrootcert=/etc/ssl/certs/server-ca.crt")
-  end
-
-  it "returns replication_connection_string for hostname version v2" do
-    postgres_resource.update(hostname_version: "v2")
-    expect(postgres_resource).to receive(:dns_zone).and_return(instance_double(DnsZone)).at_least(:once)
-    s = postgres_resource.replication_connection_string(application_name: "pgubidstandby")
-    expect(s).to include("ubi_replication@private.pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com", "application_name=pgubidstandby", "sslcert=/etc/ssl/certs/client.crt", "tcp_user_timeout=30000")
-    postgres_resource.set(root_cert_1: "rc1", root_cert_2: "rc2")
-    s = postgres_resource.replication_connection_string(application_name: "pgubidstandby")
-    expect(s).to include("ubi_replication@private.pg-name.#{postgres_resource.ubid}.postgres.ubicloud.com", "application_name=pgubidstandby", "sslcert=/etc/ssl/certs/client.crt", "tcp_user_timeout=30000", "sslrootcert=/etc/ssl/certs/server-ca.crt")
-  end
-
-  it "returns replication_connection_string with ip when no dns_zone exists" do
-    vm = create_hosted_vm(project, private_subnet, "pg-vm")
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id, is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
-    vm.nics.first.update(private_ipv4: "172.0.0.9/32")
-    expect(postgres_resource.dns_zone).to be_nil
-    s = postgres_resource.replication_connection_string(application_name: "pgubidstandby")
-    expect(s).to include("ubi_replication@172.0.0.9", "application_name=pgubidstandby", "sslcert=/etc/ssl/certs/client.crt", "tcp_user_timeout=30000")
-  end
-
-  it "returns replication_connection_string for hostname version v3 without root CAs" do
-    expect(postgres_resource).to receive(:dns_zone).and_return(instance_double(DnsZone)).at_least(:once)
-    postgres_resource.update(hostname_version: "v3", root_cert_1: nil, root_cert_2: nil)
-    s = postgres_resource.replication_connection_string(application_name: "pgubidstandby")
-    expect(s).to include("ubi_replication@pg-name.#{postgres_resource.ubid}.private.pg.ubicloud.app", "application_name=pgubidstandby", "sslcert=/etc/ssl/certs/client.crt", "tcp_user_timeout=30000", "sslrootcert=system")
+    it "returns connection strings with the ip addresses of the representative server" do
+      expect(postgres_resource.dns_zone).to be_nil
+      expect(postgres_resource.connection_string).to eq("postgres://postgres:dummy-password@1.2.3.4:5432/postgres?sslmode=require&channel_binding=require")
+      expect(postgres_resource.replication_connection_string(application_name: "pgubidstandby")).to eq("postgres://ubi_replication@172.0.0.9?sslrootcert=system&sslcert=/etc/ssl/certs/client.crt&sslkey=/etc/ssl/certs/client.key&sslmode=require&dbname=postgres&application_name=pgubidstandby&tcp_user_timeout=30000")
+    end
   end
 
   it "returns internal_firewall_rules with SSH from control plane, subnet ports 5432/6432, and configured external CIDRs" do
-    allow(Config).to receive_messages(control_plane_outbound_cidrs: ["1.2.3.4/32"], postgres_internal_firewall_cidrs: ["5.6.7.8/32"])
+    expect(Config).to receive_messages(control_plane_outbound_cidrs: ["1.2.3.4/32"], postgres_internal_firewall_cidrs: ["5.6.7.8/32"])
 
     postgres_resource.update(private_subnet_id: private_subnet.id)
     rendered = postgres_resource.internal_firewall_rules.map { "#{it[:cidr]}:#{it[:port_range].to_range}" }
@@ -272,34 +250,33 @@ RSpec.describe PostgresResource do
       )
     }
 
-    before { allow(postgres_resource).to receive(:read_replicas).and_return([replica]) }
+    it "updates self and each read replica, leaving a ubicloud.shared_memory_percent the new size allows" do
+      postgres_resource.update(user_config: {"ubicloud.shared_memory_percent" => "50"})
+      replica.update(user_config: {"work_mem" => "32MB"})
 
-    it "updates self and each read replica" do
       postgres_resource.update_target_sizes_with_replicas(target_vm_size: "standard-8", target_storage_size_gib: 256, ha_type: "async")
 
-      expect(postgres_resource.reload).to have_attributes(target_vm_size: "standard-8", target_storage_size_gib: 256, ha_type: "async")
-      expect(replica.reload).to have_attributes(target_vm_size: "standard-8", target_storage_size_gib: 256)
+      expect(postgres_resource.reload).to have_attributes(target_vm_size: "standard-8", target_storage_size_gib: 256, ha_type: "async", user_config: {"ubicloud.shared_memory_percent" => "50"})
+      expect(replica.reload).to have_attributes(target_vm_size: "standard-8", target_storage_size_gib: 256, user_config: {"work_mem" => "32MB"})
     end
 
-    it "clears ignore_instance_size_mismatch on all servers when target_vm_size changes" do
-      parent_server = instance_double(PostgresServer)
-      replica_server = instance_double(PostgresServer)
-      allow(postgres_resource).to receive(:servers).and_return([parent_server])
-      allow(replica).to receive(:servers).and_return([replica_server])
-
-      expect(parent_server).to receive(:decr_ignore_instance_size_mismatch)
-      expect(replica_server).to receive(:decr_ignore_instance_size_mismatch)
-
-      postgres_resource.update_target_sizes_with_replicas(target_vm_size: "standard-8", target_storage_size_gib: 256)
-    end
-
-    it "does not clear ignore_instance_size_mismatch when target_vm_size does not change" do
-      parent_server = instance_double(PostgresServer)
-      allow(postgres_resource).to receive(:servers).and_return([parent_server])
-
-      expect(parent_server).not_to receive(:decr_ignore_instance_size_mismatch)
+    it "clears ignore_instance_size_mismatch on all servers only when target_vm_size changes" do
+      servers = [postgres_resource, replica].map do |resource|
+        server = PostgresServer.create(
+          timeline:, resource_id: resource.id, vm_id: create_hosted_vm(project, private_subnet, "pg-vm-#{resource.name}").id,
+          is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17",
+        )
+        Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
+        server.incr_ignore_instance_size_mismatch
+        server
+      end
+      semaphores = Semaphore.where(strand_id: servers.map(&:id), name: "ignore_instance_size_mismatch")
 
       postgres_resource.update_target_sizes_with_replicas(target_vm_size: postgres_resource.target_vm_size, target_storage_size_gib: 256)
+      expect(semaphores.count).to eq 2
+
+      postgres_resource.update_target_sizes_with_replicas(target_vm_size: "standard-8", target_storage_size_gib: 256)
+      expect(semaphores.all).to eq []
     end
 
     it "clamps ubicloud.shared_memory_percent on self and replicas when scaling down" do
@@ -312,22 +289,6 @@ RSpec.describe PostgresResource do
 
       expect(postgres_resource.reload.user_config).to eq({"ubicloud.shared_memory_percent" => "50", "work_mem" => "32MB"})
       expect(replica.reload.user_config).to eq({"ubicloud.shared_memory_percent" => "50"})
-    end
-
-    it "leaves ubicloud.shared_memory_percent alone when the new size still allows it" do
-      postgres_resource.update(user_config: {"ubicloud.shared_memory_percent" => "50"})
-
-      postgres_resource.update_target_sizes_with_replicas(target_vm_size: "standard-8", target_storage_size_gib: 256)
-
-      expect(postgres_resource.reload.user_config).to eq({"ubicloud.shared_memory_percent" => "50"})
-    end
-
-    it "leaves a config without ubicloud.shared_memory_percent untouched" do
-      postgres_resource.update(user_config: {"work_mem" => "32MB"})
-
-      postgres_resource.update_target_sizes_with_replicas(target_vm_size: "standard-8", target_storage_size_gib: 256)
-
-      expect(postgres_resource.reload.user_config).to eq({"work_mem" => "32MB"})
     end
   end
 
@@ -347,29 +308,40 @@ RSpec.describe PostgresResource do
         synchronization_status: "ready", timeline_access: "fetch", version: postgres_resource.target_version)
     }
 
-    it "provisions a new server without excluding hosts when Config.allow_unspread_servers is true for regular instances" do
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
+    def new_server
+      PostgresServer.exclude(id: [ps1.id, ps2.id]).first
+    end
+
+    def prepare_servers
+      [ps1, ps2].each do |server|
+        VmStorageVolume.create(vm_id: server.vm_id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
+        Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
+      end
+    end
+
+    it "provisions a fetch standby on the existing timeline without excluding hosts when Config.allow_unspread_servers is true" do
       ps1
       expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: [])).and_call_original
 
-      postgres_resource.provision_new_standby
-      expect(PostgresServer.count).to eq(2)
-      new_server = PostgresServer.exclude(id: ps1.id).first
-      expect(new_server).not_to be_nil
-      expect(new_server.resource_id).to eq(postgres_resource.id)
-      expect(new_server.timeline_access).to eq("fetch")
+      expect { postgres_resource.provision_new_standby }.to change(PostgresServer, :count).from(1).to(2).and not_change(PostgresTimeline, :count)
+      expect(new_server).to have_attributes(resource_id: postgres_resource.id, timeline_id: timeline.id, timeline_access: "fetch")
       expect(new_server.vm.vm_firewalls).to eq([postgres_resource.internal_firewall])
-      expect(new_server.vm.strand.stack[0]["exclude_data_centers"]).to eq([])
+      expect(new_server.vm.strand.stack[0].values_at("exclude_data_centers", "exclude_host_ids")).to eq([[], []])
     end
 
-    it "reuses the existing timeline rather than creating a new one (HA reprovision keeps a single timeline)" do
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
+    it "provisions a new server on the parent's timeline for a read replica" do
       ps1
+      parent = described_class.create(
+        name: "pg-parent", superuser_password: "dummy-password", ha_type: "none", target_version: "17", location_id:, project_id: project.id,
+        user_config: {}, pgbouncer_user_config: {}, target_vm_size: "standard-2", target_storage_size_gib: 64,
+      )
+      parent_timeline = create_postgres_timeline(location_id:)
+      PostgresServer.create(timeline: parent_timeline, resource_id: parent.id, vm_id: create_hosted_vm(project, private_subnet, "pg-parent-vm").id,
+        is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
+      postgres_resource.update(parent_id: parent.id)
 
-      expect { postgres_resource.provision_new_standby }.not_to change(PostgresTimeline, :count)
-      new_server = PostgresServer.exclude(id: ps1.id).first
-      expect(new_server.timeline_id).to eq(timeline.id)
-      expect(new_server.timeline_access).to eq("fetch")
+      expect { postgres_resource.provision_new_standby }.to change(PostgresServer, :count).from(2).to(3)
+      expect(PostgresServer.where(resource_id: postgres_resource.id).exclude(id: ps1.id).get(:timeline_id)).to eq(parent_timeline.id)
     end
 
     describe "excludes only active server data centers" do
@@ -382,10 +354,8 @@ RSpec.describe PostgresResource do
         vm_host_2 = create_vm_host
         vm_host_2.update(data_center: "dc2")
         vm1.update(vm_host_id: vm_host_1.id)
-        VmStorageVolume.create(vm_id: vm1.id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
         vm2.update(vm_host_id: vm_host_2.id)
-        VmStorageVolume.create(vm_id: vm2.id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
-        allow(postgres_resource).to receive(:servers).and_return([ps1, ps2])
+        prepare_servers
       end
 
       it "excludes both data centers when both servers are active" do
@@ -394,171 +364,20 @@ RSpec.describe PostgresResource do
       end
 
       it "does not exclude data center of a server being recycled" do
-        Strand.create_with_id(ps2, prog: "Postgres::PostgresServerNexus", label: "wait")
         ps2.incr_recycle
         expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: ["dc1"])).and_call_original
         postgres_resource.provision_new_standby
       end
 
       it "does not exclude data center of a server being destroyed" do
-        Strand.create_with_id(ps2, prog: "Postgres::PostgresServerNexus", label: "wait")
         ps2.incr_destroy
         expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: ["dc1"])).and_call_original
         postgres_resource.provision_new_standby
       end
     end
 
-    describe "use_different_az excludes only active server AZs" do
-      before do
-        expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::AWS_PROVIDER_NAME).at_least(:once)
-        ps1
-        ps2
-        NicAwsResource.create_with_id(vm1.user_nic.id, subnet_az: "a")
-        NicAwsResource.create_with_id(vm2.user_nic.id, subnet_az: "b")
-        allow(ps1).to receive_messages(needs_recycling?: false, destroy_set?: false)
-        allow(ps2).to receive_messages(needs_recycling?: false, destroy_set?: false)
-        allow(postgres_resource).to receive_messages(servers: [ps1, ps2], use_different_az_set?: true)
-      end
-
-      it "excludes both AZs when both servers are active" do
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: contain_exactly("a", "b"))).and_call_original
-        postgres_resource.provision_new_standby
-        new_server = PostgresServer.exclude(id: [ps1.id, ps2.id]).first
-        expect(new_server.vm.strand.stack[0]["unsupported_azs"]).to contain_exactly("a", "b")
-        expect(new_server.vm.strand.stack[0]["exclude_availability_zones"]).to eq([])
-      end
-
-      it "does not exclude AZ of a server being recycled" do
-        allow(ps2).to receive(:needs_recycling?).and_return(true)
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: ["a"])).and_call_original
-        postgres_resource.provision_new_standby
-      end
-
-      it "does not exclude AZ of a server being destroyed" do
-        allow(ps2).to receive(:destroy_set?).and_return(true)
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: ["a"])).and_call_original
-        postgres_resource.provision_new_standby
-      end
-    end
-
-    describe "with a requested availability zone" do
-      before do
-        expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::AWS_PROVIDER_NAME).at_least(:once)
-        ps1
-        ps2
-        NicAwsResource.create_with_id(vm1.user_nic.id, subnet_az: "a")
-        NicAwsResource.create_with_id(vm2.user_nic.id, subnet_az: "b")
-        LocationAz.create(location_id:, az: "a", zone_id: "usw2-az1")
-        LocationAz.create(location_id:, az: "b", zone_id: "usw2-az2")
-        LocationAz.create(location_id:, az: "c", zone_id: "usw2-az3")
-        VmStorageVolume.create(vm_id: vm1.id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
-        VmStorageVolume.create(vm_id: vm2.id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
-        postgres_resource.incr_use_different_az
-      end
-
-      it "pins new servers to the zone the required id names, spread or not" do
-        postgres_resource.update(required_availability_zone_id: "usw2-az1")
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
-          .with(hash_including(availability_zone: "a", availability_zone_required: true, exclude_availability_zones: [])).and_call_original
-        postgres_resource.provision_new_standby
-        new_server = PostgresServer.exclude(id: [ps1.id, ps2.id]).first
-        expect(new_server.vm.strand.stack[0]["required_availability_zone"]).to eq("a")
-      end
-
-      it "prefers the zone the preferred id names while still excluding the azs in use" do
-        postgres_resource.update(preferred_availability_zone_id: "usw2-az3")
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
-          .with(hash_including(availability_zone: "c", availability_zone_required: false, exclude_availability_zones: contain_exactly("a", "b"))).and_call_original
-        postgres_resource.provision_new_standby
-        new_server = PostgresServer.exclude(id: [ps1.id, ps2.id]).first
-        expect(new_server.vm.strand.stack[0]["required_availability_zone"]).to be_nil
-      end
-
-      it "drops the preferred zone when a server already occupies it" do
-        postgres_resource.update(preferred_availability_zone_id: "usw2-az2")
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
-          .with(hash_including(availability_zone: nil, exclude_availability_zones: contain_exactly("a", "b"))).and_call_original
-        postgres_resource.provision_new_standby
-      end
-
-      it "ignores a preferred zone id the location does not have" do
-        postgres_resource.update(preferred_availability_zone_id: "usw2-az9")
-        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
-          .with(hash_including(availability_zone: nil)).and_call_original
-        postgres_resource.provision_new_standby
-      end
-
-      it "refuses to place a server when the location does not have the required zone id" do
-        postgres_resource.update(required_availability_zone_id: "usw2-az9")
-        expect {
-          postgres_resource.provision_new_standby
-        }.to raise_error RuntimeError, "#{postgres_resource.location.name} has no availability zone usw2-az9"
-      end
-    end
-
-    it "provisions a new server in a used az for aws if use_different_az_set? is false" do
-      expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::AWS_PROVIDER_NAME).at_least(:once)
-      ps1
-      ps2
-      NicAwsResource.create_with_id(vm1.user_nic.id, subnet_az: "a")
-      NicAwsResource.create_with_id(vm2.user_nic.id, subnet_az: "b")
-
-      expect(postgres_resource).to receive(:representative_server).and_return(ps1)
-      expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(availability_zone: "a")).and_call_original
-      expect(postgres_resource).to receive(:use_different_az_set?).and_return(false)
-
-      postgres_resource.provision_new_standby
-      expect(postgres_resource.reload.servers.count).to eq(3)
-      new_server = PostgresServer.exclude(id: [ps1.id, ps2.id]).first
-      expect(new_server.vm.user_nic.strand.stack[0]["availability_zone"]).to eq("a")
-    end
-
-    it "aims a new server at the preferred az rather than following the representative server" do
-      expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::AWS_PROVIDER_NAME).at_least(:once)
-      ps1
-      NicAwsResource.create_with_id(vm1.user_nic.id, subnet_az: "a")
-      LocationAz.create(location_id:, az: "c", zone_id: "usw2-az3")
-      postgres_resource.update(preferred_availability_zone_id: "usw2-az3")
-
-      expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
-        .with(hash_including(availability_zone: "c", exclude_availability_zones: [])).and_call_original
-      postgres_resource.provision_new_standby
-      new_server = PostgresServer.exclude(id: ps1.id).first
-      expect(new_server.vm.user_nic.strand.stack[0]["availability_zone"]).to eq("c")
-    end
-
-    it "provisions a new server with the correct timeline for a regular instance" do
-      ps1
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
-      allow(postgres_resource).to receive_messages(read_replica?: false, timeline:)
-      expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::HETZNER_PROVIDER_NAME).at_least(:once)
-
-      expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(timeline_id: timeline.id)).and_call_original
-
-      new_server = postgres_resource.provision_new_standby.subject
-      expect(new_server).not_to be_nil
-      expect(new_server.timeline_id).to eq(timeline.id)
-      expect(new_server.vm.strand.stack[0]["exclude_host_ids"]).to eq([])
-    end
-
-    it "provisions a new server with the correct timeline for a read replica" do
-      ps1
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
-      parent_timeline = create_postgres_timeline(location_id:)
-      parent_resource = instance_double(described_class, timeline: parent_timeline)
-      allow(postgres_resource).to receive_messages(read_replica?: true, parent: parent_resource)
-      expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::HETZNER_PROVIDER_NAME).at_least(:once)
-
-      expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(timeline_id: parent_timeline.id)).and_call_original
-
-      expect { postgres_resource.provision_new_standby }.to change(PostgresServer, :count).by(1)
-      new_server = PostgresServer.exclude(id: ps1.id).order(:created_at).last
-      expect(new_server.timeline_id).to eq(parent_timeline.id)
-      expect(new_server.vm.strand.stack[0]["exclude_host_ids"]).to eq([])
-    end
-
     it "provisions a new server excluding the representative server's host for leaseweb" do
-      allow(Config).to receive(:allow_unspread_servers).and_return(false)
+      expect(Config).to receive(:allow_unspread_servers).and_return(false)
       expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::LEASEWEB_PROVIDER_NAME).at_least(:once)
       ps1
       vm_host = create_vm_host
@@ -567,45 +386,98 @@ RSpec.describe PostgresResource do
       expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_host_ids: [vm_host.id])).and_call_original
 
       postgres_resource.provision_new_standby
-      expect(postgres_resource.reload.servers.count).to eq(2)
-      new_server = PostgresServer.exclude(id: ps1.id).first
       expect(new_server.vm.strand.stack[0]["exclude_host_ids"]).to eq([vm_host.id])
     end
-  end
 
-  it "returns has_enough_fresh_servers correctly" do
-    # Create a server that doesn't need recycling (matches target_vm_size, target_storage_size_gib, target_version)
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-fresh")
-    vm_host = create_vm_host
-    storage_device = StorageDevice.create(name: "nvme0", vm_host_id: vm_host.id, total_storage_gib: 100, available_storage_gib: 80)
-    VmStorageVolume.create(vm_id: vm.id, boot: false, size_gib: 64, disk_index: 1, storage_device_id: storage_device.id)
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
+    describe "on AWS" do
+      before do
+        expect(postgres_resource.location).to receive(:provider).and_return(HostProvider::AWS_PROVIDER_NAME).at_least(:once)
+        ps1
+        ps2
+        NicAwsResource.create_with_id(vm1.user_nic.id, subnet_az: "a")
+        NicAwsResource.create_with_id(vm2.user_nic.id, subnet_az: "b")
+        prepare_servers
+      end
 
-    postgres_resource.update(ha_type: PostgresResource::HaType::NONE)
-    expect(postgres_resource.has_enough_fresh_servers?).to be(true)
-    postgres_resource.update(ha_type: PostgresResource::HaType::ASYNC)
-    expect(postgres_resource.has_enough_fresh_servers?).to be(false)
-  end
+      it "provisions a new server in the az of the representative server if use_different_az is not set" do
+        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(availability_zone: "a")).and_call_original
+        postgres_resource.provision_new_standby
+        expect(new_server.vm.user_nic.strand.stack[0]["availability_zone"]).to eq("a")
+      end
 
-  it "returns has_enough_fresh_servers correctly during upgrades" do
-    # Create representative server with version 16 so version returns "16"
-    vm_rep = create_hosted_vm(project, private_subnet, "pg-vm-rep")
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm_rep.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
+      it "aims a new server at the preferred az rather than following the representative server" do
+        LocationAz.create(location_id:, az: "c", zone_id: "usw2-az3")
+        postgres_resource.update(preferred_availability_zone_id: "usw2-az3")
+        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
+          .with(hash_including(availability_zone: "c", exclude_availability_zones: [])).and_call_original
+        postgres_resource.provision_new_standby
+        expect(new_server.vm.user_nic.strand.stack[0]["availability_zone"]).to eq("c")
+      end
 
-    # Set target_version to trigger upgrade path (version < target_version)
-    postgres_resource.update(target_version: "17")
+      describe "with use_different_az set" do
+        before { postgres_resource.incr_use_different_az }
 
-    # Create candidate server
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-fresh")
-    candidate_server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      synchronization_status: "ready", timeline_access: "push", version: "17")
+        it "excludes the AZs of active servers" do
+          expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: contain_exactly("a", "b"))).and_call_original
+          postgres_resource.provision_new_standby
+          stack = new_server.vm.strand.stack[0]
+          expect([stack["unsupported_azs"].sort, stack["exclude_availability_zones"]]).to eq([["a", "b"], []])
+        end
 
-    # Stub consecutive returns: first candidate exists, then nil (tests both branches)
-    expect(postgres_resource).to receive(:upgrade_candidate_server).and_return(candidate_server, nil)
-    expect(postgres_resource.has_enough_fresh_servers?).to be(true)
-    expect(postgres_resource.has_enough_fresh_servers?).to be(false)
+        it "does not exclude AZ of a server being recycled" do
+          ps2.incr_recycle
+          expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: ["a"])).and_call_original
+          postgres_resource.provision_new_standby
+        end
+
+        it "does not exclude AZ of a server being destroyed" do
+          ps2.incr_destroy
+          expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: ["a"])).and_call_original
+          postgres_resource.provision_new_standby
+        end
+      end
+
+      describe "with a requested availability zone" do
+        before do
+          LocationAz.create(location_id:, az: "a", zone_id: "usw2-az1")
+          LocationAz.create(location_id:, az: "b", zone_id: "usw2-az2")
+          LocationAz.create(location_id:, az: "c", zone_id: "usw2-az3")
+          postgres_resource.incr_use_different_az
+        end
+
+        it "pins new servers to the zone the required id names, spread or not" do
+          postgres_resource.update(required_availability_zone_id: "usw2-az1")
+          expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
+            .with(hash_including(availability_zone: "a", availability_zone_required: true, exclude_availability_zones: [])).and_call_original
+          postgres_resource.provision_new_standby
+          expect(new_server.vm.strand.stack[0]["required_availability_zone"]).to eq("a")
+        end
+
+        it "prefers the zone the preferred id names while still excluding the azs in use" do
+          postgres_resource.update(preferred_availability_zone_id: "usw2-az3")
+          expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
+            .with(hash_including(availability_zone: "c", availability_zone_required: false, exclude_availability_zones: contain_exactly("a", "b"))).and_call_original
+          postgres_resource.provision_new_standby
+          expect(new_server.vm.strand.stack[0]["required_availability_zone"]).to be_nil
+        end
+
+        it "drops the preferred zone when a server already occupies it, or when the location does not have it" do
+          expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble)
+            .with(hash_including(availability_zone: nil, exclude_availability_zones: contain_exactly("a", "b"))).and_call_original.twice
+          postgres_resource.update(preferred_availability_zone_id: "usw2-az2")
+          postgres_resource.provision_new_standby
+          postgres_resource.update(preferred_availability_zone_id: "usw2-az9")
+          postgres_resource.provision_new_standby
+        end
+
+        it "refuses to place a server when the location does not have the required zone id" do
+          postgres_resource.update(required_availability_zone_id: "usw2-az9")
+          expect {
+            postgres_resource.provision_new_standby
+          }.to raise_error RuntimeError, "#{postgres_resource.location.name} has no availability zone usw2-az9"
+        end
+      end
+    end
   end
 
   describe "family image migration" do
@@ -683,25 +555,14 @@ RSpec.describe PostgresResource do
       )
     end
 
-    it "returns candidate when available and location is not aws" do
-      # Primary server
+    it "returns the newest standby with a boot image that supports the target version when location is not aws" do
       create_server_with_boot_image(boot_image_version: "20240801", is_representative: true)
-      # Standby servers with valid boot image
-      create_server_with_boot_image(boot_image_version: "20240801", created_offset: -3600)
-      standby2 = create_server_with_boot_image(boot_image_version: "20240801", created_offset: 0)
-
-      # Should return the standby with latest created_at
-      expect(postgres_resource.upgrade_candidate_server).to eq(standby2)
-    end
-
-    it "returns nil when candidate is not available and location is not aws" do
-      # Primary server
-      create_server_with_boot_image(boot_image_version: "20240801", is_representative: true)
-      # Standby servers with old boot image (< 20240801)
-      create_server_with_boot_image(boot_image_version: "20240729", created_offset: -3600)
-      create_server_with_boot_image(boot_image_version: "20240729", created_offset: 0)
-
+      create_server_with_boot_image(boot_image_version: "20240729", created_offset: 3600)
       expect(postgres_resource.upgrade_candidate_server).to be_nil
+
+      create_server_with_boot_image(boot_image_version: "20240801", created_offset: -3600)
+      standby = create_server_with_boot_image(boot_image_version: "20240801", created_offset: 0)
+      expect(postgres_resource.reload.upgrade_candidate_server).to eq(standby)
     end
 
     it "returns candidate when available and location is aws" do
@@ -815,115 +676,49 @@ RSpec.describe PostgresResource do
     end
   end
 
-  it "returns has_enough_ready_servers correctly when not upgrading" do
-    # Create a server that doesn't need recycling and has strand.label == "wait"
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-ready")
-    vm_host = create_vm_host
-    storage_device = StorageDevice.create(name: "nvme0", vm_host_id: vm_host.id, total_storage_gib: 100, available_storage_gib: 80)
-    VmStorageVolume.create(vm_id: vm.id, boot: false, size_gib: 64, disk_index: 1, storage_device_id: storage_device.id)
-    server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
-    Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
+  describe "convergence checks" do
+    let(:storage_device) { StorageDevice.create(name: "nvme0", vm_host_id: create_vm_host.id, total_storage_gib: 100, available_storage_gib: 80) }
 
-    postgres_resource.update(ha_type: PostgresResource::HaType::NONE)
-    expect(postgres_resource.has_enough_ready_servers?).to be(true)
-    postgres_resource.update(ha_type: PostgresResource::HaType::ASYNC)
-    expect(postgres_resource.has_enough_ready_servers?).to be(false)
-  end
+    def create_server(version: "17", is_representative: false, label: "wait", boot_image_version: nil)
+      vm = create_hosted_vm(project, private_subnet, "pg-vm-#{SecureRandom.hex(4)}")
+      VmStorageVolume.create(vm_id: vm.id, boot: false, size_gib: 64, disk_index: 1, storage_device_id: storage_device.id)
+      if boot_image_version
+        boot_image = BootImage.create(name: "postgres-ubuntu-#{SecureRandom.hex(4)}", version: boot_image_version, vm_host_id: storage_device.vm_host_id, activated_at: Time.now, size_gib: 10)
+        VmStorageVolume.create(vm_id: vm.id, boot: true, size_gib: 64, disk_index: 0, storage_device_id: storage_device.id, boot_image_id: boot_image.id)
+      end
+      server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id, is_representative:,
+        synchronization_status: "ready", timeline_access: is_representative ? "push" : "fetch", version:)
+      Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label:)
+      server
+    end
 
-  it "returns has_enough_ready_servers correctly when upgrading and the candidate is not present" do
-    # Create representative server with version 16
-    vm_rep = create_hosted_vm(project, private_subnet, "pg-vm-rep-no-candidate")
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm_rep.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
-    postgres_resource.update(target_version: "17")
+    def convergence_state
+      postgres_resource.reload
+      [postgres_resource.has_enough_fresh_servers?, postgres_resource.has_enough_ready_servers?, postgres_resource.needs_convergence?]
+    end
 
-    # No upgrade_candidate_server exists (would need specific boot image setup)
-    expect(postgres_resource).to receive(:upgrade_candidate_server).at_least(:once).and_return(nil)
-    expect(postgres_resource.has_enough_ready_servers?).to be(false)
-  end
+    it "counts fresh and ready servers against the HA type when not upgrading" do
+      create_server(is_representative: true)
+      expect(convergence_state).to eq [true, true, false]
+      postgres_resource.update(ha_type: PostgresResource::HaType::ASYNC)
+      expect(convergence_state).to eq [false, false, true]
+    end
 
-  it "returns has_enough_ready_servers correctly when upgrading and the candidate is not in wait state" do
-    # Create representative server with version 16
-    vm_rep = create_hosted_vm(project, private_subnet, "pg-vm-rep-not-ready")
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm_rep.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
-    postgres_resource.update(target_version: "17")
+    it "needs convergence when a server needs recycling" do
+      create_server(is_representative: true).incr_recycle
+      expect(convergence_state).to eq [false, false, true]
+    end
 
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-candidate-not-ready")
-    candidate_server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      synchronization_status: "ready", timeline_access: "push", version: "17")
-    Strand.create_with_id(candidate_server, prog: "Postgres::PostgresServerNexus", label: "wait_bootstrap_rhizome")
+    it "requires a fresh and ready upgrade candidate while upgrading" do
+      create_server(version: "16", is_representative: true)
+      expect(convergence_state).to eq [false, false, true]
 
-    expect(postgres_resource).to receive(:upgrade_candidate_server).at_least(:once).and_return(candidate_server)
-    expect(postgres_resource.has_enough_ready_servers?).to be(false)
-  end
+      candidate = create_server(label: "wait_bootstrap_rhizome", boot_image_version: "20240801")
+      expect(convergence_state).to eq [true, false, true]
 
-  it "returns has_enough_ready_servers correctly when upgrading and the candidate is ready" do
-    # Create representative server with version 16
-    vm_rep = create_hosted_vm(project, private_subnet, "pg-vm-rep-ready")
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm_rep.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
-    postgres_resource.update(target_version: "17")
-
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-candidate-ready")
-    candidate_server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      synchronization_status: "ready", timeline_access: "push", version: "17")
-    Strand.create_with_id(candidate_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-
-    expect(postgres_resource).to receive(:upgrade_candidate_server).at_least(:once).and_return(candidate_server)
-    expect(postgres_resource.has_enough_ready_servers?).to be(true)
-  end
-
-  it "returns needs_convergence correctly when server needs recycling" do
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-needs-recycle")
-    # Create server with version 16 while target_version is 17 -> needs_recycling? returns true
-    server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
-    Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
-
-    postgres_resource.update(ha_type: PostgresResource::HaType::NONE)
-    expect(postgres_resource.needs_convergence?).to be(true)
-  end
-
-  it "returns needs_convergence correctly when server count mismatch" do
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-count-mismatch")
-    vm_host = create_vm_host
-    storage_device = StorageDevice.create(name: "nvme0", vm_host_id: vm_host.id, total_storage_gib: 100, available_storage_gib: 80)
-    VmStorageVolume.create(vm_id: vm.id, boot: false, size_gib: 64, disk_index: 1, storage_device_id: storage_device.id)
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
-
-    # 1 server but ha_type requires 2
-    postgres_resource.update(ha_type: PostgresResource::HaType::ASYNC)
-    expect(postgres_resource.needs_convergence?).to be(true)
-  end
-
-  it "returns needs_convergence correctly when no convergence needed" do
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-no-converge")
-    vm_host = create_vm_host
-    storage_device = StorageDevice.create(name: "nvme0", vm_host_id: vm_host.id, total_storage_gib: 100, available_storage_gib: 80)
-    VmStorageVolume.create(vm_id: vm.id, boot: false, size_gib: 64, disk_index: 1, storage_device_id: storage_device.id)
-    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
-
-    # 1 server, ha_type requires 1, no recycling needed
-    postgres_resource.update(ha_type: PostgresResource::HaType::NONE)
-    expect(postgres_resource.needs_convergence?).to be(false)
-  end
-
-  it "returns needs_convergence correctly when upgrading" do
-    vm = create_hosted_vm(project, private_subnet, "pg-vm-upgrade-converge")
-    vm_host = create_vm_host
-    storage_device = StorageDevice.create(name: "nvme0", vm_host_id: vm_host.id, total_storage_gib: 100, available_storage_gib: 80)
-    VmStorageVolume.create(vm_id: vm.id, boot: false, size_gib: 64, disk_index: 1, storage_device_id: storage_device.id)
-    server = PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
-    Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
-
-    # version 16, target 17 -> needs upgrade
-    postgres_resource.update(ha_type: PostgresResource::HaType::NONE, target_version: "17")
-    expect(postgres_resource.needs_convergence?).to be(true)
+      candidate.strand.update(label: "wait")
+      expect(convergence_state).to eq [true, true, true]
+    end
   end
 
   it "needs_sync_replication? is true only for sync HA" do
@@ -1040,39 +835,28 @@ RSpec.describe PostgresResource do
       server
     end
 
-    it "returns 'deleting' when destroy semaphore is set" do
+    it "returns 'deleting' when destroy or destroying semaphore is set" do
       postgres_resource.incr_destroy
       expect(postgres_resource.display_state).to eq("deleting")
-    end
-
-    it "returns 'deleting' when destroying semaphore is set" do
+      postgres_resource.decr_destroy
       postgres_resource.incr_destroying
-      expect(postgres_resource.display_state).to eq("deleting")
+      expect(postgres_resource.reload.display_state).to eq("deleting")
     end
 
-    it "returns 'unavailable' when representative server's strand label is 'unavailable'" do
-      create_representative_server(strand_label: "unavailable")
-      expect(postgres_resource.display_state).to eq("unavailable")
-    end
-
-    it "returns 'restoring_backup' when representative server's strand label is 'initialize_database_from_backup'" do
-      create_representative_server(strand_label: "initialize_database_from_backup")
-      expect(postgres_resource.display_state).to eq("restoring_backup")
-    end
-
-    it "returns 'replaying_wal' when representative server's strand label is 'wait_catch_up'" do
-      create_representative_server(strand_label: "wait_catch_up")
-      expect(postgres_resource.display_state).to eq("replaying_wal")
-    end
-
-    it "returns 'replaying_wal' when representative server's strand label is 'wait_synchronization'" do
-      create_representative_server(strand_label: "wait_synchronization")
-      expect(postgres_resource.display_state).to eq("replaying_wal")
-    end
-
-    it "returns 'finalizing_restore' when representative server's strand label is 'wait_recovery_completion'" do
-      create_representative_server(strand_label: "wait_recovery_completion")
-      expect(postgres_resource.display_state).to eq("finalizing_restore")
+    it "maps the representative server's strand label to a display state" do
+      server = create_representative_server(strand_label: "wait")
+      states = %w[unavailable initialize_database_from_backup wait_catch_up wait_synchronization wait_recovery_completion wait].to_h do |label|
+        server.strand.update(label:)
+        [label, postgres_resource.reload.display_state]
+      end
+      expect(states).to eq(
+        "unavailable" => "unavailable",
+        "initialize_database_from_backup" => "restoring_backup",
+        "wait_catch_up" => "replaying_wal",
+        "wait_synchronization" => "replaying_wal",
+        "wait_recovery_completion" => "finalizing_restore",
+        "wait" => "running",
+      )
     end
 
     it "returns 'restarting' while the representative server has a restart pending" do
@@ -1081,21 +865,13 @@ RSpec.describe PostgresResource do
       expect(postgres_resource.display_state).to eq("restarting")
     end
 
-    it "returns 'running' when strand label is 'wait' and has no children" do
+    it "returns 'running' only for running resource strand labels while the representative server waits" do
       create_representative_server(strand_label: "wait")
-      expect(postgres_resource.display_state).to eq("running")
-    end
-
-    it "returns 'running' while waiting for a public certificate renewal" do
-      create_representative_server(strand_label: "wait")
-      postgres_resource.strand.update(label: "wait_refresh_public_cert")
-      expect(postgres_resource.display_state).to eq("running")
-    end
-
-    it "returns 'creating' when strand is 'wait_server'" do
-      create_representative_server(strand_label: "wait")
-      postgres_resource.strand.update(label: "wait_server")
-      expect(postgres_resource.display_state).to eq("creating")
+      states = %w[wait_refresh_public_cert wait_server].to_h do |label|
+        postgres_resource.strand.update(label:)
+        [label, postgres_resource.display_state]
+      end
+      expect(states).to eq("wait_refresh_public_cert" => "running", "wait_server" => "creating")
     end
   end
 
@@ -1112,37 +888,21 @@ RSpec.describe PostgresResource do
     expect(postgres_resource.in_maintenance_window?).to be(false)
   end
 
-  # 2025-05-01 10:30Z is a Thursday (bit index 3 in DAYS_OF_WEEK).
-  it "is in the window on an enabled day" do
-    postgres_resource.update(maintenance_window_start_at: 10, maintenance_window_days_bitmask: 1 << 3)
-    expect(Time).to receive(:now).and_return(Time.utc(2025, 5, 1, 10, 30))
-    expect(postgres_resource.in_maintenance_window?).to be(true)
-  end
-
-  it "is not in the window on a disabled day" do
-    postgres_resource.update(maintenance_window_start_at: 10, maintenance_window_days_bitmask: 1 << 0) # Monday only
-    expect(Time).to receive(:now).and_return(Time.utc(2025, 5, 1, 10, 30))
-    expect(postgres_resource.in_maintenance_window?).to be(false)
-  end
-
-  it "treats 0 days as every day" do
-    postgres_resource.update(maintenance_window_start_at: 10, maintenance_window_days_bitmask: 0)
-    expect(Time).to receive(:now).and_return(Time.utc(2025, 5, 1, 10, 30))
-    expect(postgres_resource.in_maintenance_window?).to be(true)
-  end
-
-  it "is not in the window outside the hours regardless of day" do
-    postgres_resource.update(maintenance_window_start_at: 10, maintenance_window_days_bitmask: 1 << 3)
-    expect(Time).to receive(:now).and_return(Time.utc(2025, 5, 1, 13))
-    expect(postgres_resource.in_maintenance_window?).to be(false)
-  end
-
-  it "checks the day the window opened on when it wraps past midnight" do
-    # Window 23:00-01:00 enabled only on Thursday; Friday 00:30 still belongs to
-    # the Thursday window.
-    postgres_resource.update(maintenance_window_start_at: 23, maintenance_window_days_bitmask: 1 << 3)
-    expect(Time).to receive(:now).and_return(Time.utc(2025, 5, 2, 0, 30)) # Friday 00:30
-    expect(postgres_resource.in_maintenance_window?).to be(true)
+  it "checks the enabled days of the maintenance window, by the day the window opened" do
+    # 2025-05-01 is a Thursday (bit index 3 in DAYS_OF_WEEK). A 23:00-01:00
+    # window enabled only on Thursday still covers Friday 00:30.
+    cases = [
+      [10, 1 << 3, Time.utc(2025, 5, 1, 10, 30), true],
+      [10, 1 << 0, Time.utc(2025, 5, 1, 10, 30), false],
+      [10, 0, Time.utc(2025, 5, 1, 10, 30), true],
+      [10, 1 << 3, Time.utc(2025, 5, 1, 13), false],
+      [23, 1 << 3, Time.utc(2025, 5, 2, 0, 30), true],
+    ]
+    expect(Time).to receive(:now).and_return(*cases.map { it[2] })
+    expect(cases.map { |start_at, bitmask, _|
+      postgres_resource.set(maintenance_window_start_at: start_at, maintenance_window_days_bitmask: bitmask)
+      postgres_resource.in_maintenance_window?
+    }).to eq(cases.map(&:last))
   end
 
   it "converts day names to and from the bitmask" do
@@ -1179,40 +939,23 @@ RSpec.describe PostgresResource do
     expect(postgres_resource.maintenance_window_label).to eq("Mon, Thu, 22:00 - 00:00 (UTC)")
   end
 
-  describe "#pending_platform_maintenance?" do
-    def create_rep_server(version: "17")
-      vm = create_hosted_vm(project, private_subnet, "pg-vm-#{SecureRandom.hex(4)}")
-      server = PostgresServer.create(
-        timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
-        is_representative: true, synchronization_status: "ready",
-        timeline_access: "push", version:,
-      )
-      Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      server
-    end
+  it "#pending_platform_maintenance? is true only when a server is marked for a platform recycle" do
+    server = PostgresServer.create(
+      timeline:, resource_id: postgres_resource.id, vm_id: create_hosted_vm(project, private_subnet, "pg-vm").id,
+      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17",
+    )
+    Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
+    expect(postgres_resource.pending_platform_maintenance?).to be(false)
 
-    it "is true when a server is marked for recycle" do
-      create_rep_server.incr_recycle
-      expect(postgres_resource.reload.pending_platform_maintenance?).to be(true)
-    end
+    # A customer-initiated major version upgrade and system-health recycles
+    # are not platform maintenance.
+    postgres_resource.update(target_version: "18")
+    server.incr_recycle_lagging_read_replica
+    server.incr_recycle_unavailable_server
+    expect(postgres_resource.pending_platform_maintenance?).to be(false)
 
-    it "is false for a customer-initiated major version upgrade" do
-      create_rep_server(version: "17")
-      postgres_resource.update(target_version: "18")
-      expect(postgres_resource.reload.pending_platform_maintenance?).to be(false)
-    end
-
-    it "is false for system-health recycles (lagging/unavailable)" do
-      server = create_rep_server
-      server.incr_recycle_lagging_read_replica
-      server.incr_recycle_unavailable_server
-      expect(postgres_resource.reload.pending_platform_maintenance?).to be(false)
-    end
-
-    it "is false when nothing is marked for recycle" do
-      create_rep_server
-      expect(postgres_resource.reload.pending_platform_maintenance?).to be(false)
-    end
+    server.incr_recycle
+    expect(postgres_resource.pending_platform_maintenance?).to be(true)
   end
 
   it "returns target_standby_count correctly" do
@@ -1327,43 +1070,24 @@ RSpec.describe PostgresResource do
     end
   end
 
-  describe "#ongoing_failover?" do
-    def create_server_with_strand(label:)
-      vm = create_hosted_vm(project, private_subnet, "pg-vm-#{SecureRandom.hex(4)}")
+  it "#ongoing_failover? is true while a server is taking over" do
+    strands = Array.new(2) do
       server = PostgresServer.create(
-        timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
+        timeline:, resource_id: postgres_resource.id, vm_id: create_hosted_vm(project, private_subnet, "pg-vm-#{SecureRandom.hex(4)}").id,
         synchronization_status: "ready", timeline_access: "push", version: "17",
       )
-      Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label:)
-      server
+      Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
     end
-
-    it "returns false if there is no ongoing failover" do
-      create_server_with_strand(label: "wait")
-      create_server_with_strand(label: "wait")
-      expect(postgres_resource.ongoing_failover?).to be false
-    end
-
-    it "returns true if there is an ongoing failover" do
-      create_server_with_strand(label: "taking_over")
-      create_server_with_strand(label: "wait")
-      expect(postgres_resource.ongoing_failover?).to be true
-    end
+    expect(postgres_resource.ongoing_failover?).to be false
+    strands.first.update(label: "taking_over")
+    expect(postgres_resource.reload.ongoing_failover?).to be true
   end
 
-  describe "#hostname_suffix" do
-    before do
-      postgres_resource.project_id = nil
-    end
-
-    it "returns default hostname suffix if project is nil for hostname version v2" do
-      postgres_resource.hostname_version = "v2"
-      expect(postgres_resource.hostname_suffix).to eq(Config.postgres_service_hostname)
-    end
-
-    it "returns default hostname suffix if project is nil for hostname version v3" do
-      expect(postgres_resource.hostname_suffix).to eq(Config.postgres_service_hostname_v3)
-    end
+  it "#hostname_suffix returns the default hostname suffix of the hostname version if project is nil" do
+    postgres_resource.project_id = nil
+    expect(postgres_resource.hostname_suffix).to eq(Config.postgres_service_hostname_v3)
+    postgres_resource.hostname_version = "v2"
+    expect(postgres_resource.hostname_suffix).to eq(Config.postgres_service_hostname)
   end
 
   describe "\#{,cert_}{,private_}hostname" do
@@ -1401,21 +1125,10 @@ RSpec.describe PostgresResource do
     end
   end
 
-  describe "#upgrade_stage" do
-    it "returns nil if there's no ongoing upgrade" do
-      # No child strands by default
-      expect(postgres_resource.upgrade_stage).to be_nil
-    end
-
-    it "returns the upgrade stage if there's an ongoing upgrade" do
-      # Create child strand with the ConvergePostgresResource prog
-      Strand.create(
-        prog: "Postgres::ConvergePostgresResource",
-        label: "upgrade_standby",
-        parent_id: postgres_resource.strand.id,
-      )
-      expect(postgres_resource.upgrade_stage).to eq("upgrade_standby")
-    end
+  it "#upgrade_stage returns the label of an ongoing upgrade" do
+    expect(postgres_resource.upgrade_stage).to be_nil
+    Strand.create(prog: "Postgres::ConvergePostgresResource", label: "upgrade_standby", parent_id: postgres_resource.strand.id)
+    expect(postgres_resource.reload.upgrade_stage).to eq("upgrade_standby")
   end
 
   describe "#upgrade_status" do
@@ -1433,10 +1146,7 @@ RSpec.describe PostgresResource do
     end
 
     it "returns running if the postgres resource upgrade is in progress" do
-      # Create child strand with upgrade label and ensure target_version != version
       Strand.create(prog: "Postgres::ConvergePostgresResource", label: "upgrade_standby", parent_id: postgres_resource.strand.id)
-      postgres_resource.update(target_version: "17")
-      # version returns representative_server.version or target_version, so create server with version 16
       vm = create_hosted_vm(project, private_subnet, "pg-vm-upgrade")
       PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id, is_representative: true,
         synchronization_status: "ready", timeline_access: "push", version: "16")
@@ -1444,35 +1154,25 @@ RSpec.describe PostgresResource do
     end
   end
 
-  describe "#can_upgrade?" do
-    it "returns true if the postgres resource can be upgraded" do
-      postgres_resource.update(target_version: "16", flavor: PostgresResource::Flavor::STANDARD)
-      expect(postgres_resource.can_upgrade?).to be true
-    end
-
-    it "returns false if the postgres resource cannot be upgraded" do
-      postgres_resource.update(target_version: PostgresResource::LATEST_VERSION, flavor: PostgresResource::Flavor::STANDARD)
-      expect(postgres_resource.can_upgrade?).to be false
-    end
+  it "#can_upgrade? is true unless the target version is the latest version" do
+    postgres_resource.update(target_version: "16", flavor: PostgresResource::Flavor::STANDARD)
+    expect(postgres_resource.can_upgrade?).to be true
+    postgres_resource.update(target_version: PostgresResource::LATEST_VERSION)
+    expect(postgres_resource.can_upgrade?).to be false
   end
 
-  describe "#ready_for_read_replica?" do
-    it "returns true if the postgres resource is ready for read replica" do
-      allow(postgres_resource).to receive(:needs_convergence?).and_return(false)
-      allow(PostgresTimeline).to receive(:earliest_restore_time).with(postgres_resource.timeline).and_return(Time.now - 3600)
-      expect(postgres_resource.ready_for_read_replica?).to be true
-    end
+  it "#ready_for_read_replica? requires a converged resource with a restorable backup" do
+    vm = create_hosted_vm(project, private_subnet, "pg-vm")
+    VmStorageVolume.create(vm:, boot: false, size_gib: 64, disk_index: 1)
+    PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm.id,
+      is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17")
+    expect(postgres_resource.ready_for_read_replica?).to be false
 
-    it "returns false if the postgres resource needs convergence" do
-      allow(postgres_resource).to receive(:needs_convergence?).and_return(true)
-      expect(postgres_resource.ready_for_read_replica?).to be false
-    end
+    timeline.update(cached_earliest_backup_at: Time.now - 3600)
+    expect(postgres_resource.reload.ready_for_read_replica?).to be true
 
-    it "returns false if there is no earliest restore time" do
-      allow(postgres_resource).to receive(:needs_convergence?).and_return(false)
-      allow(PostgresTimeline).to receive(:earliest_restore_time).with(postgres_resource.timeline).and_return(nil)
-      expect(postgres_resource.ready_for_read_replica?).to be false
-    end
+    postgres_resource.update(ha_type: PostgresResource::HaType::ASYNC)
+    expect(postgres_resource.reload.ready_for_read_replica?).to be false
   end
 
   describe "#handle_storage_auto_scale" do
@@ -1863,7 +1563,7 @@ RSpec.describe PostgresResource do
     end
 
     it "tells accounts with access that an unplanned promotion follows an unavailable primary when enabled" do
-      allow(Config).to receive(:postgres_unplanned_failover_notification_enabled).and_return(true)
+      expect(Config).to receive(:postgres_unplanned_failover_notification_enabled).and_return(true)
       postgres_resource.send_failover_notification(mode: "unplanned")
 
       expect(Util).to have_received(:send_email).with(
@@ -1986,32 +1686,19 @@ RSpec.describe PostgresResource do
   end
 
   describe ".postgres_locations" do
-    it "includes gcp-us-central1 when project has it in visible_postgres_locations" do
-      project.set_ff_visible_postgres_locations(["gcp-us-central1"])
-      names = described_class.postgres_locations(project).map(&:name)
-      expect(names).to include("gcp-us-central1")
-    end
-
-    it "excludes gcp-us-central1 when project has no visible_postgres_locations flag" do
-      expect(project.get_ff_visible_postgres_locations).to be_nil
-      names = described_class.postgres_locations(project).map(&:name)
-      expect(names).not_to include("gcp-us-central1")
-    end
-
-    it "excludes gcp-us-central1 when project's visible_postgres_locations is []" do
-      project.set_ff_visible_postgres_locations([])
-      names = described_class.postgres_locations(project).map(&:name)
-      expect(names).not_to include("gcp-us-central1")
-    end
-
-    it "includes AWS public regions regardless of visible_postgres_locations" do
-      names = described_class.postgres_locations(project).map(&:name)
-      expect(names).to include("us-east-1", "us-west-2")
-    end
-
-    it "still appends project's own BYOC locations" do
+    it "includes AWS public regions and the project's own BYOC locations" do
       byoc = Location.create(name: "p-byoc", display_name: "p-byoc", ui_name: "p-byoc", visible: false, provider: "aws", project_id: project.id)
-      expect(described_class.postgres_locations(project)).to include(byoc)
+      locations = described_class.postgres_locations(project)
+      expect(locations.map(&:name)).to include("us-east-1", "us-west-2")
+      expect(locations).to include(byoc)
+    end
+
+    it "includes gcp-us-central1 only when the project has it in visible_postgres_locations" do
+      names = [nil, [], ["gcp-us-central1"]].map do |visible|
+        project.set_ff_visible_postgres_locations(visible) if visible
+        described_class.postgres_locations(project).map(&:name).include?("gcp-us-central1")
+      end
+      expect(names).to eq [false, false, true]
     end
   end
 
@@ -2025,28 +1712,16 @@ RSpec.describe PostgresResource do
       OptionTreeGenerator.generate_allowed_options("family", option_tree, parents).map { it["family"] }.uniq
     end
 
-    it "allows GCP families for GCP locations" do
+    it "allows GCP families for GCP locations, as the project feature flags enable them" do
       family_names = gcp_family_names(project)
-
       expect(family_names).to include("c4a-standard", "c4a-highmem")
-      expect(family_names).not_to include("standard")
-      expect(family_names).not_to include("hobby")
-      expect(family_names).not_to include("m8gd")
-    end
-
-    it "hides a flag-gated GCP family until the project enables it" do
-      expect(gcp_family_names(project)).not_to include("z3-highlssd")
+      expect(family_names & ["standard", "hobby", "m8gd", "z3-highlssd"]).to eq []
 
       project.set_ff_enable_z3_highlssd(true)
-      expect(gcp_family_names(project)).to include("z3-highlssd")
-    end
-
-    it "lets a project opt out of a default-enabled GCP family" do
       project.set_ff_enable_c4a_standard(false)
-
       family_names = gcp_family_names(project)
+      expect(family_names).to include("z3-highlssd", "c4a-highmem")
       expect(family_names).not_to include("c4a-standard")
-      expect(family_names).to include("c4a-highmem")
     end
 
     it "does not offer a family in a location GCE does not have it in" do
@@ -2063,29 +1738,16 @@ RSpec.describe PostgresResource do
       family_names = allowed_families.map { it["family"] }.uniq
 
       expect(family_names).to include("standard", "hobby")
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect(family_names).not_to include(family)
-      end
+      expect(family_names & Option::GCP_FAMILY_OPTIONS).to eq []
     end
 
-    it "provides fixed storage sizes for GCP families" do
-      option_tree, parents = described_class.generate_postgres_options(project, location: [gcp_location])
-      allowed_storage = OptionTreeGenerator.generate_allowed_options("storage_size", option_tree, parents)
-
-      c4a_8_options = allowed_storage.select { it["size"] == "c4a-standard-8" }
-      expect(c4a_8_options.map { it["storage_size"] }).to eq([750])
-
-      c4a_highmem_72_options = allowed_storage.select { it["size"] == "c4a-highmem-72" }
-      expect(c4a_highmem_72_options.map { it["storage_size"] }).to eq([6000])
-    end
-
-    it "offers the two storage rungs of an n2d size" do
+    it "provides fixed storage sizes for GCP families, with two rungs for n2d sizes" do
       project.set_ff_enable_n2d_highmem(true)
       option_tree, parents = described_class.generate_postgres_options(project, location: [gcp_location])
       allowed_storage = OptionTreeGenerator.generate_allowed_options("storage_size", option_tree, parents)
+      storage_sizes = ->(size) { allowed_storage.select { it["size"] == size }.map { it["storage_size"] } }
 
-      n2d_8_options = allowed_storage.select { it["size"] == "n2d-highmem-8" }
-      expect(n2d_8_options.map { it["storage_size"] }).to eq([3000, 6000])
+      expect([storage_sizes["c4a-standard-8"], storage_sizes["c4a-highmem-72"], storage_sizes["n2d-highmem-8"]]).to eq([[750], [6000], [3000, 6000]])
       expect(allowed_storage.map { it["size"] }).not_to include("n2d-standard-8")
     end
 
@@ -2094,35 +1756,27 @@ RSpec.describe PostgresResource do
         Location.create(name: "us-east-2", provider: "aws", display_name: "aws-us-east-2", ui_name: "Ohio, US (AWS)", visible: true)
       }
 
-      def aws_sizes(project)
+      def aws_options(project, name)
         option_tree, parents = described_class.generate_postgres_options(project, location: [aws_location])
-        OptionTreeGenerator.generate_allowed_options("size", option_tree, parents).map { it["size"] }.uniq
+        OptionTreeGenerator.generate_allowed_options(name, option_tree, parents)
       end
 
-      it "hides 48xlarge sizes for every family until the project enables the flag" do
-        project.set_ff_enable_i8ge(true)
+      before { project.set_ff_enable_i8ge(true) }
 
-        sizes = aws_sizes(project)
+      it "hides 48xlarge sizes for every family until the project enables the flag" do
+        sizes = aws_options(project, "size").map { it["size"] }.uniq
         expect(sizes).to include("i8g.24xlarge", "i8ge.24xlarge")
-        expect(sizes).not_to include("i8g.48xlarge", "i8ge.48xlarge")
         expect(sizes.grep(/48xlarge/)).to be_empty
       end
 
-      it "offers 48xlarge sizes for enabled families once the project enables the flag" do
+      it "offers 48xlarge sizes with the 192 vCPU storage size for enabled families once the project enables the flag" do
         project.set_ff_enable_aws_48xlarge(true)
-        project.set_ff_enable_i8ge(true)
 
-        sizes = aws_sizes(project)
+        sizes = aws_options(project, "size").map { it["size"] }.uniq
         expect(sizes).to include("i8g.48xlarge", "i8ge.48xlarge")
         expect(sizes).not_to include("i7i.48xlarge", "i7ie.48xlarge")
-      end
 
-      it "offers the 192 vCPU storage size for 48xlarge sizes" do
-        project.set_ff_enable_aws_48xlarge(true)
-        project.set_ff_enable_i8ge(true)
-        option_tree, parents = described_class.generate_postgres_options(project, location: [aws_location])
-        allowed_storage = OptionTreeGenerator.generate_allowed_options("storage_size", option_tree, parents)
-
+        allowed_storage = aws_options(project, "storage_size")
         expect(allowed_storage.select { it["size"] == "i8g.48xlarge" }.map { it["storage_size"] }).to eq([45000])
         expect(allowed_storage.select { it["size"] == "i8ge.48xlarge" }.map { it["storage_size"] }).to eq([120000])
       end
