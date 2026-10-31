@@ -76,8 +76,8 @@ ExecStart=nc -l 8080 -6
     end
 
     it "installs nc to other vms too" do
-      allow(vm_1).to receive(:boot_image).and_return("almalinux-9")
-      allow(vm_2).to receive(:boot_image).and_return("ubuntu-jammy")
+      expect(vm_1).to receive(:boot_image).and_return("almalinux-9").twice
+      expect(vm_2).to receive(:boot_image).and_return("ubuntu-jammy").twice
       expect(vm_1.sshable).to receive(:_cmd).with("sudo yum install -y nc")
       expect(vm_outside.sshable).to receive(:_cmd).with("sudo apt-get update && sudo apt-get install -y netcat-openbsd")
 
@@ -444,7 +444,7 @@ ExecStart=nc -l 8080 -6
 
   describe ".vm1" do
     it "returns the vm from the frame" do
-      allow(firewall_test).to receive(:vm1).and_call_original
+      expect(firewall_test).to receive(:vm1).and_call_original
       expect(firewall_test).to receive_messages(frame: {"vm_to_be_connected_id" => vm_1.id})
       expect(firewall_test.vm1.id).to eq vm_1.id
     end
@@ -452,15 +452,15 @@ ExecStart=nc -l 8080 -6
 
   describe ".vm2" do
     it "returns the second vm" do
-      allow(firewall_test).to receive(:vm1).and_call_original
-      allow(firewall_test).to receive(:vm2).and_call_original
+      expect(firewall_test).to receive(:vm1).and_call_original
+      expect(firewall_test).to receive(:vm2).and_call_original
       expect(firewall_test.vm2.id).to eq(firewall.private_subnets.first.vms.last.id)
     end
   end
 
   describe ".vm_outside" do
     it "returns the first vm of the outside subnet from the frame" do
-      allow(firewall_test).to receive(:vm_outside).and_call_original
+      expect(firewall_test).to receive(:vm_outside).and_call_original
       outside_id = vm_outside.id
       expect(firewall_test).to receive(:frame).and_return({"subnet_id_outside" => private_subnet_2.id})
       expect(firewall_test.vm_outside.id).to eq outside_id
