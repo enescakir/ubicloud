@@ -44,17 +44,17 @@ RSpec.describe Prog::Test::DnsZone do
     end
 
     it "fails when the dns service project id is missing" do
-      allow(Config).to receive(:dns_service_project_id).and_return(nil)
+      expect(Config).to receive(:dns_service_project_id).and_return(nil)
       expect { described_class.assemble(Config.kubernetes_service_hostname, Config.kubernetes_service_project_id) }.to raise_error(RuntimeError, "Config.dns_service_project_id must be set")
     end
 
     it "fails when the cloudflare api token is missing" do
-      allow(Config).to receive(:e2e_cloudflare_api_token).and_return(nil)
+      expect(Config).to receive(:e2e_cloudflare_api_token).and_return(nil)
       expect { described_class.assemble(Config.kubernetes_service_hostname, Config.kubernetes_service_project_id) }.to raise_error(RuntimeError, "Config.e2e_cloudflare_api_token must be set")
     end
 
     it "fails when the cloudflare parent zone name is missing" do
-      allow(Config).to receive(:e2e_cloudflare_parent_zone_name).and_return(nil)
+      expect(Config).to receive(:e2e_cloudflare_parent_zone_name).and_return(nil)
       expect { described_class.assemble(Config.kubernetes_service_hostname, Config.kubernetes_service_project_id) }.to raise_error(RuntimeError, "Config.e2e_cloudflare_parent_zone_name must be set")
     end
 
