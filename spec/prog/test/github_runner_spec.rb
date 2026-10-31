@@ -148,8 +148,7 @@ RSpec.describe Prog::Test::GithubRunner do
 
   describe "#trigger_test_run" do
     it "triggers test run and stores run id from response" do
-      allow(ENV).to receive(:[]).and_call_original
-      expect(ENV).to receive(:[]).with("GITHUB_RUN_ID").and_return("12345")
+      stub_const("ENV", ENV.to_h.merge("GITHUB_RUN_ID" => "12345"))
       expect(client).to receive(:post).with(
         "repos/tahcloud/github-e2e-tests-metal/actions/workflows/test.yml/dispatches",
         {ref: "main", inputs: {triggered_by: "12345", provider: "metal", runners: gr_test.frame["labels"].to_json}, return_run_details: true},
@@ -158,8 +157,7 @@ RSpec.describe Prog::Test::GithubRunner do
     end
 
     it "hops to clean_resources when trigger fails" do
-      allow(ENV).to receive(:[]).and_call_original
-      expect(ENV).to receive(:[]).with("GITHUB_RUN_ID").and_return("12345")
+      stub_const("ENV", ENV.to_h.merge("GITHUB_RUN_ID" => "12345"))
       expect(client).to receive(:post).with(
         "repos/tahcloud/github-e2e-tests-metal/actions/workflows/test.yml/dispatches",
         {ref: "main", inputs: {triggered_by: "12345", provider: "metal", runners: gr_test.frame["labels"].to_json}, return_run_details: true},
