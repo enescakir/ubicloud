@@ -31,15 +31,11 @@ RSpec.describe Clover, "postgres" do
   end
 
   describe "unauthenticated" do
-    it "cannot list without login" do
+    it "cannot list or create without login" do
       visit "/postgres"
-
       expect(page.title).to eq("Ubicloud - Login")
-    end
 
-    it "cannot create without login" do
       visit "/postgres/create"
-
       expect(page.title).to eq("Ubicloud - Login")
     end
   end
@@ -344,9 +340,14 @@ RSpec.describe Clover, "postgres" do
         expect(page).to have_content("Fallback from r8gd.large")
       end
 
-      it "does not annotate the CPU subtext when the representative is on its intended type" do
+      it "shows the AZ id for AWS, the creation time, and no fallback annotation when the representative is on its intended type" do
+        AwsInstance.create_with_id(pg.representative_server.vm, instance_id: "i-0123456789abcdefg", az_id: "usw2-az2")
+
         visit "#{project.path}#{pg.path}/overview"
         expect(page).to have_no_content("Fallback from")
+        expect(page).to have_content "usw2-az2 (AWS)"
+        expect(page).to have_content "Created #{pg.created_at.utc.strftime("%b %d, %Y")}"
+        expect(page).to have_content pg.created_at.utc.strftime("%H:%M UTC")
       end
 
       it "shows the disk usage in red if usage is high" do
@@ -366,19 +367,6 @@ RSpec.describe Clover, "postgres" do
 
         visit "#{project.path}#{pg.path}/overview"
         expect(page).to have_content "128 GB"
-      end
-
-      it "shows AZ id for AWS PostgreSQL instance" do
-        AwsInstance.create_with_id(pg.representative_server.vm, instance_id: "i-0123456789abcdefg", az_id: "usw2-az2")
-
-        visit "#{project.path}#{pg.path}/overview"
-        expect(page).to have_content "usw2-az2 (AWS)"
-      end
-
-      it "shows the creation time on the overview page" do
-        visit "#{project.path}#{pg.path}/overview"
-        expect(page).to have_content "Created #{pg.created_at.utc.strftime("%b %d, %Y")}"
-        expect(page).to have_content pg.created_at.utc.strftime("%H:%M UTC")
       end
 
       it "shows total disk if VictoriaMetricsResource is not accessible" do
@@ -691,7 +679,7 @@ RSpec.describe Clover, "postgres" do
       it "generates backup download credentials once the minio flag is set" do
         project.set_ff_postgres_backup_download_minio(true)
         create_minio_cluster_for_blob_storage
-        allow(Config).to receive(:minio_service_project_id).and_return(Config.postgres_service_project_id)
+        expect(Config).to receive(:minio_service_project_id).and_return(Config.postgres_service_project_id).at_least(:once)
         expiration = Time.now.utc + 36 * 60 * 60
         expect(Minio::Client).to receive(:new).and_return(instance_double(Minio::Client, list_objects: [], assume_role: {access_key_id: "AKID", secret_access_key: "SECRET", session_token: "TOKEN", expiration:})).at_least(:once)
 
@@ -897,7 +885,7 @@ RSpec.describe Clover, "postgres" do
       it "can cancel storage auto-scale" do
         pg.incr_storage_auto_scale_action_performed_90
         Strand.create(prog: "Postgres::ConvergePostgresResource", label: "start", parent_id: pg.strand.id)
-        allow(Util).to receive(:send_email)
+        expect(Util).to receive(:send_email)
 
         visit "#{project.path}#{pg.path}/settings"
         click_button "Cancel Scale-Up"
@@ -908,7 +896,7 @@ RSpec.describe Clover, "postgres" do
       it "shows error when cancel storage auto-scale fails" do
         pg.incr_storage_auto_scale_action_performed_90
         st = Strand.create(prog: "Postgres::ConvergePostgresResource", label: "start", parent_id: pg.strand.id)
-        allow(Util).to receive(:send_email)
+        expect(Util).not_to receive(:send_email)
 
         visit "#{project.path}#{pg.path}/settings"
         st.update(label: "recycle_representative_server")
@@ -1044,7 +1032,7 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "shows database logs with filters and context" do
-        allow(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
+        expect(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
         rows = [{
           "log_id" => "0196a9f7-0000-7000-8000-000000000001",
           "time_unix_nano" => "2026-05-08T10:00:00.123",
@@ -1079,7 +1067,7 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "shows pagination link preserving current filters" do
-        allow(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
+        expect(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
         rows = Array.new(51) { |i|
           {
             "log_id" => "0196a9f7-0000-7000-8000-#{i.to_s.rjust(12, "0")}",
@@ -1108,7 +1096,7 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "does not ask to increase limit if already at max" do
-        allow(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
+        expect(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
         rows = Array.new(501) { |i|
           {
             "log_id" => "0196a9f7-0000-7000-8000-#{i.to_s.rjust(12, "0")}",
@@ -1137,8 +1125,7 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "shows inline error for invalid log query" do
-        allow(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
-        expect(parseable_client).not_to receive(:query)
+        expect(ParseableResource).not_to receive(:client_for_project)
 
         start_str = Time.now.utc.iso8601
         end_str = (Time.now.utc - 30 * 60).iso8601
@@ -1149,7 +1136,7 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "shows a message when no logs are found" do
-        allow(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
+        expect(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
         expect(parseable_client).to receive(:query).and_return([])
 
         visit "#{project.path}#{pg.path}/logs"
@@ -1158,7 +1145,7 @@ RSpec.describe Clover, "postgres" do
       end
 
       it "shows logs with unparseable timestamps, various severity levels, and no context" do
-        allow(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
+        expect(ParseableResource).to receive(:client_for_project).and_return(parseable_client)
         rows = [
           ["invalid", "WARN"],
           ["2026-05-08T10:00:01", "DEBUG"],
@@ -1478,19 +1465,13 @@ RSpec.describe Clover, "postgres" do
     end
 
     describe "config" do
-      it "can view configuration" do
+      it "can view configuration, with a restart required warning for restart-required configs" do
         pg.update(user_config: {"max_connections" => "120"})
         visit "#{project.path}#{pg.path}/config"
 
         expect(page).to have_content "PostgreSQL Configuration"
         expect(page).to have_field "pg_config_keys[]", with: "max_connections"
         expect(page).to have_field "pg_config_values[]", with: "120"
-      end
-
-      it "shows restart required warning for restart-required configs" do
-        pg.update(user_config: {"max_connections" => "120"})
-        visit "#{project.path}#{pg.path}/config"
-
         expect(page).to have_css ".restart-warning"
       end
 
@@ -1517,16 +1498,17 @@ RSpec.describe Clover, "postgres" do
         visit "#{project_wo_permissions.path}#{pg_wo_permission.path}/config"
         expect(page.title).to eq "Ubicloud - pg-without-permission"
 
-        expect { find ".delete-config-btn" }.to raise_error Capybara::ElementNotFound
-        expect { find ".save-config-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".config-group .delete-config-btn"
+        expect(page).to have_no_css ".save-config-btn"
       end
 
       it "shows update button when user has permissions" do
+        pg.update(user_config: {"max_connections" => "120"})
         visit "#{project.path}#{pg.path}/config"
         expect(page).to have_button "Save"
 
-        expect { find ".pg-config-card .delete-config-btn" }.not_to raise_error
-        expect { find ".save-config-btn" }.not_to raise_error
+        expect(page).to have_css ".pg-config-card .config-group .delete-config-btn"
+        expect(page).to have_css ".save-config-btn"
       end
 
       it "can update configuration" do
