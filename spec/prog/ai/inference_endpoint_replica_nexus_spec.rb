@@ -175,7 +175,7 @@ RSpec.describe Prog::Ai::InferenceEndpointReplicaNexus do
 
     it "hops to setup for runpod" do
       expect(inference_endpoint).to receive(:engine).and_return "runpod"
-      allow(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"})
+      expect(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"}).twice
       stub_request(:post, "https://api.runpod.io/graphql")
         .with(
           body: "{\"query\":\"query Pod { pod(input: {podId: \\\"thepodid\\\"}) { id name runtime  { ports { ip isIpPublic privatePort publicPort type } } } }\"}",
@@ -194,7 +194,7 @@ RSpec.describe Prog::Ai::InferenceEndpointReplicaNexus do
 
     it "waits until runpod ip and port are available" do
       expect(inference_endpoint).to receive(:engine).and_return "runpod"
-      allow(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"})
+      expect(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"}).twice
       stub_request(:post, "https://api.runpod.io/graphql")
         .with(
           body: "{\"query\":\"query Pod { pod(input: {podId: \\\"thepodid\\\"}) { id name runtime  { ports { ip isIpPublic privatePort publicPort type } } } }\"}",
@@ -211,7 +211,7 @@ RSpec.describe Prog::Ai::InferenceEndpointReplicaNexus do
 
     it "raises an error if runpod pod id is unexpected" do
       expect(inference_endpoint).to receive(:engine).and_return "runpod"
-      allow(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"})
+      expect(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"}).twice
       stub_request(:post, "https://api.runpod.io/graphql")
         .with(
           body: "{\"query\":\"query Pod { pod(input: {podId: \\\"thepodid\\\"}) { id name runtime  { ports { ip isIpPublic privatePort publicPort type } } } }\"}",
@@ -228,7 +228,7 @@ RSpec.describe Prog::Ai::InferenceEndpointReplicaNexus do
 
     it "raises an error if pod cannot be found" do
       expect(inference_endpoint).to receive(:engine).and_return "runpod"
-      allow(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"})
+      expect(replica).to receive(:external_state).and_return({"pod_id" => "thepodid"}).twice
       stub_request(:post, "https://api.runpod.io/graphql")
         .with(
           body: "{\"query\":\"query Pod { pod(input: {podId: \\\"thepodid\\\"}) { id name runtime  { ports { ip isIpPublic privatePort publicPort type } } } }\"}",
@@ -459,7 +459,7 @@ RSpec.describe Prog::Ai::InferenceEndpointReplicaNexus do
     end
 
     it "keeps a project eligible via an active ResourceCredit despite an exhausted free quota and no payment method" do
-      allow(FreeQuota).to receive(:get_exhausted_projects).and_return(projects.map(&:id))
+      expect(FreeQuota).to receive(:get_exhausted_projects).and_return(projects.map(&:id))
       ResourceCredit.create(project_id: projects.first.id, name: "Test credit", amount: 5, active_from: Time.utc(Time.now.year, Time.now.month))
       expect(inference_endpoint).to receive(:is_public).and_return(true).twice
       expect(inference_endpoint).to receive(:ubid).and_return("ieubid")
