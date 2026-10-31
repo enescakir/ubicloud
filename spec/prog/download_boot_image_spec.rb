@@ -14,13 +14,13 @@ RSpec.describe Prog::DownloadBootImage do
 
   describe ".sha256sum" do
     it "fails if image is unknown in production" do
-      allow(Config).to receive(:production?).and_return(true)
+      expect(Config).to receive(:production?).and_return(true)
       refresh_frame(dbi, new_values: {"version" => "20260101"})
       expect { dbi.sha256sum }.to raise_error RuntimeError, "Cannot download images without a SHA256 checksum in production"
     end
 
     it "allows to download unknown images in development" do
-      allow(Config).to receive(:production?).and_return(false)
+      expect(Config).to receive(:production?).and_return(false)
       refresh_frame(dbi, new_values: {"version" => "20260101"})
       expect(dbi.sha256sum).to be_nil
     end
@@ -219,11 +219,11 @@ RSpec.describe Prog::DownloadBootImage do
 
     it "generates R2 presigned URL for github-runners images if a custom_url not provided" do
       version = described_class::BOOT_IMAGE_SHA256.dig("github-ubuntu-2204", vm_host.arch).keys.max
-      allow(Config).to receive_messages(ubicloud_images_r2_bucket_name: "images-bucket", ubicloud_images_blob_storage_certs: nil)
+      expect(Config).to receive_messages(ubicloud_images_r2_bucket_name: "images-bucket", ubicloud_images_blob_storage_certs: nil)
       url_presigner = instance_double(Aws::S3::Presigner)
       s3_client = instance_double(Aws::S3::Client)
-      allow(Aws::S3::Presigner).to receive(:new).with(client: s3_client).and_return(url_presigner)
-      allow(Aws::S3::Client).to receive(:new).and_return(s3_client)
+      expect(Aws::S3::Presigner).to receive(:new).with(client: s3_client).and_return(url_presigner)
+      expect(Aws::S3::Client).to receive(:new).and_return(s3_client)
       expect(url_presigner).to receive(:presigned_url).with(:get_object, hash_including(bucket: "images-bucket", key: "github-ubuntu-2204-x64-#{version}.raw")).and_return("https://r2.example.com/my-image.raw")
       params_json = {
         "image_name" => "github-ubuntu-2204",
