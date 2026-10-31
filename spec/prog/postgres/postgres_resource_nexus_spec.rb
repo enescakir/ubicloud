@@ -270,7 +270,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus do
 
     it "uses presigned cert if available for hostname version v3" do
       DnsZone.create(project_id: postgres_project.id, name: "pg.ubicloud.app")
-      allow(Config).to receive_messages(acme_email: "test@ubicloud.com")
+      expect(Config).to receive_messages(acme_email: "test@ubicloud.com")
       st = Strand.create_with_id(Prog::Vnet::MaintainPresignedPostgresCerts::STRAND_ID, prog: "Vnet::MaintainPresignedPostgresCerts", label: "wait", schedule: Time.now - 100)
       postgres_resource_id = PostgresResource.generate_uuid
       cert_data, csr_key = Util.create_certificate(subject: "/CN=*.#{UBID.to_ubid(postgres_resource_id)}.pg.ubicloud.app", duration: 60 * 60 * 24 * 30 * 3)
@@ -295,7 +295,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus do
 
     it "handles case where presigned cert isn't available for hostname version v3" do
       DnsZone.create(project_id: postgres_project.id, name: "pg.ubicloud.app")
-      allow(Config).to receive_messages(postgres_service_hostname: "pg.ubicloud.app", acme_email: "test@ubicloud.com")
+      expect(Config).to receive(:acme_email).and_return("test@ubicloud.com")
       expect(PostgresResource.count).to eq 0
       st = described_class.assemble(project_id: customer_project.id, location_id:, name: "pg-name", target_vm_size: "standard-2", target_storage_size_gib: 128, hostname_version: "v3")
       pg = st.subject
@@ -318,7 +318,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus do
     end
 
     it "does not use publicly signed certs for hostname version v3 if there is no DNS zone" do
-      allow(Config).to receive_messages(postgres_service_hostname: "pg.ubicloud.app", acme_email: "test@ubicloud.com")
+      expect(Config).to receive(:acme_email).and_return("test@ubicloud.com")
       expect(PostgresResource.count).to eq 0
       st = described_class.assemble(project_id: customer_project.id, location_id:, name: "pg-name", target_vm_size: "standard-2", target_storage_size_gib: 128, hostname_version: "v3")
       pg = st.subject
