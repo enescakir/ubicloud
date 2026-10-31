@@ -479,29 +479,27 @@ RSpec.describe Prog::Base do
       st = Strand.create(prog: "Test", label: :set_expired_no_page_deadline)
       st.unsynchronized_run
 
-      allow(Clog).to receive(:emit)
+      expect(Clog).to receive(:emit).with(
+        "#{st.ubid} has an expired deadline! Test.pusher1 did not reach pusher2 on time",
+        {expired_deadline: {strand: st.ubid, prog: "Test", label: "pusher1", deadline_target: "pusher2"}},
+      ).and_call_original
+      expect(Clog).to receive(:emit).with("hopped", instance_of(Hash)).and_call_original
       expect(Prog::PageNexus).not_to receive(:assemble)
       expect {
         st.unsynchronized_run
       }.not_to change { Page.active.count }.from(0)
-
-      expect(Clog).to have_received(:emit).with(
-        "#{st.ubid} has an expired deadline! Test.pusher1 did not reach pusher2 on time",
-        {expired_deadline: {strand: st.ubid, prog: "Test", label: "pusher1", deadline_target: "pusher2"}},
-      )
       expect(st.stack.last["deadline_notified"]).to be true
     end
 
     it "emits the log only once across repeated runs" do
       st = Strand.create(prog: "Test", label: :set_expired_no_page_deadline)
 
-      allow(Clog).to receive(:emit)
-      3.times { st.unsynchronized_run }
-
-      expect(Clog).to have_received(:emit).with(
+      expect(Clog).to receive(:emit).with(
         "#{st.ubid} has an expired deadline! Test.pusher1 did not reach pusher2 on time",
         {expired_deadline: {strand: st.ubid, prog: "Test", label: "pusher1", deadline_target: "pusher2"}},
-      ).once
+      ).once.and_call_original
+      expect(Clog).to receive(:emit).with("hopped", instance_of(Hash)).and_call_original.thrice
+      3.times { st.unsynchronized_run }
     end
 
     it "automatically shortens nap if there is an unnotified deadline before it" do
@@ -784,8 +782,8 @@ RSpec.describe Prog::Base do
     it "hops to destroy if destroy semaphore incremented and run before_destroy" do
       st.update(prog: "Test2", label: "pusher1")
       Semaphore.incr(st.id, :destroy)
-      allow(Clog).to receive(:emit).and_call_original
-      expect(Clog).to receive(:emit).with("before destroy called")
+      expect(Clog).to receive(:emit).with("before destroy called").and_call_original
+      expect(Clog).to receive(:emit).with("exited", instance_of(Hash)).and_call_original
       expect { st.unsynchronized_run }.to change(st, :exitval).from(nil).to({"msg" => "exiting early due to destroy semaphore"})
     end
 
