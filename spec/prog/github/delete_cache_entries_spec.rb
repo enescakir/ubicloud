@@ -66,7 +66,7 @@ RSpec.describe Prog::Github::DeleteCacheEntries do
       entry = entries[0]
       st = described_class.assemble(repository.id)
       in_transaction = false
-      allow(DB).to receive(:transaction).and_wrap_original do |m, *args, **kwargs, &block|
+      expect(DB).to receive(:transaction).at_least(:once).and_wrap_original do |m, *args, **kwargs, &block|
         if kwargs == {savepoint: true}
           begin
             in_transaction = true
