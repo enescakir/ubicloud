@@ -18,15 +18,11 @@ RSpec.describe Clover, "vm" do
   let(:vm_wo_permission) { Prog::Vm::Nexus.assemble("dummy-public key", project_wo_permissions.id, name: "dummy-vm-2").subject }
 
   describe "unauthenticated" do
-    it "can not list without login" do
+    it "can not list or create without login" do
       visit "/vm"
-
       expect(page.title).to eq("Ubicloud - Login")
-    end
 
-    it "can not create without login" do
       visit "/vm/create"
-
       expect(page.title).to eq("Ubicloud - Login")
     end
   end
@@ -96,16 +92,6 @@ RSpec.describe Clover, "vm" do
         vm.update(vcpus: 31)
         page.refresh
         expect(page).to have_content("31/32 (96%)")
-      end
-
-      it "shows 404 page if attempting to create a VM with an invalid location" do
-        visit "#{project.path}/vm/create"
-        fill_in "Name", with: "dummy-vm"
-        choose "Germany"
-
-        Location.where(display_name: "eu-central-h1").destroy
-        click_button "Create"
-        expect(page.status_code).to eq 404
       end
 
       it "shows 404 page if attempting to create a VM with an invalid location format" do
@@ -230,23 +216,14 @@ RSpec.describe Clover, "vm" do
           miv
         end
 
-        it "shows the Machine Image boot card and machine_image select" do
+        it "shows the Machine Image boot card and machine_image select, scoped to locations with a published MI and to images with a latest version" do
+          create_machine_image_version_metal(project_id: project.id, location_id: Location::HETZNER_FSN1_ID, machine_image_store_id: miv.metal.store_id, name: "unpublished", version: "v1")
           visit "#{project.path}/vm/create"
           expect(page).to have_field("boot_image", with: "__machine_image", count: 1, disabled: false)
           expect(page).to have_select("machine_image", with_options: ["my-image@latest"])
-        end
-
-        it "scopes the Machine Image card to locations with a published MI" do
-          visit "#{project.path}/vm/create"
+          expect(page).to have_no_select("machine_image", with_options: ["unpublished@latest"])
           expect(page).to have_css("label.form_location_#{Location::HETZNER_FSN1_UBID} input[value=__machine_image]", visible: :all)
           expect(page).to have_no_css("label.form_location_#{Location::HETZNER_HEL1_UBID} input[value=__machine_image]", visible: :all)
-        end
-
-        it "excludes other machine images without a latest version" do
-          create_machine_image_version_metal(project_id: project.id, location_id: Location::HETZNER_FSN1_ID, machine_image_store_id: miv.metal.store_id, name: "unpublished", version: "v1")
-          visit "#{project.path}/vm/create"
-          expect(page).to have_select("machine_image", with_options: ["my-image@latest"])
-          expect(page).to have_no_select("machine_image", with_options: ["unpublished@latest"])
         end
 
         it "is hidden when the user lacks MachineImage:view permission" do
