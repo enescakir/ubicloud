@@ -20,7 +20,7 @@ RSpec.describe Prog::Test::KubernetesNodeImages do
     it "starts a build for each version" do
       kubernetes_project = Project.create(name: "kubernetes-service")
       MachineImageStore.create(project_id: image_project.id, location_id:, provider: "r2", region: "auto", endpoint: "https://r2.cloudflare.com/", bucket: "test-bucket", access_key: "ak", secret_key: "sk")
-      allow(Config).to receive_messages(kubernetes_service_project_id: kubernetes_project.id, machine_images_service_project_id: image_project.id)
+      expect(Config).to receive_messages(kubernetes_service_project_id: kubernetes_project.id, machine_images_service_project_id: image_project.id)
 
       expect { prog.build_node_images }.to hop("wait_node_images")
 
@@ -47,7 +47,7 @@ RSpec.describe Prog::Test::KubernetesNodeImages do
     end
 
     it "records the built versions once every build has popped" do
-      allow(Config).to receive(:machine_images_service_project_id).and_return(image_project.id)
+      expect(Config).to receive(:machine_images_service_project_id).and_return(image_project.id).twice
       metals.each { it.machine_image_version.machine_image.update(project_id: image_project.id, location_id:, latest_version_id: it.id) }
       refresh_frame(prog, new_values: {"build_strand_ids" => [Strand.generate_uuid]})
 
