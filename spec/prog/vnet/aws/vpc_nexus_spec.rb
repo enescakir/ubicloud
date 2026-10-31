@@ -107,7 +107,7 @@ RSpec.describe Prog::Vnet::Aws::VpcNexus do
 
     it "authorizes mgmt SSH ingress from each control_plane_outbound_cidrs entry, routing IPv6 cidrs to ipv_6_ranges" do
       Prog::Vnet::NicNexus.assemble(ps.id, name: "test-mgmt-nic", is_management: true)
-      allow(Config).to receive(:control_plane_outbound_cidrs).and_return(["100.64.0.0/10", "192.0.2.0/24", "fd00::/8"])
+      expect(Config).to receive(:control_plane_outbound_cidrs).and_return(["100.64.0.0/10", "192.0.2.0/24", "fd00::/8"])
       client.stub_responses(:describe_vpcs, vpcs: [{state: "available", vpc_id: "vpc-0123456789abcdefg"}])
       client.stub_responses(:create_security_group, [{group_id: "sg-user"}, {group_id: "sg-mgmt"}])
       expect(client).to receive(:authorize_security_group_ingress).with({group_id: "sg-mgmt", ip_permissions: [{ip_protocol: "tcp", from_port: 22, to_port: 22, ip_ranges: [{cidr_ip: "100.64.0.0/10"}]}]}).and_call_original
