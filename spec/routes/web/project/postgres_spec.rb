@@ -271,7 +271,8 @@ RSpec.describe Clover, "postgres" do
 
         expect(page.title).to eq("Ubicloud - Create PostgreSQL Database")
 
-        expect { choose option: "github-runners" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_css "input[type=radio][name=location][value='#{Location::HETZNER_FSN1_UBID}']"
+        expect(page).to have_no_css "input[type=radio][name=location][value='#{Location::GITHUB_RUNNERS_UBID}']"
       end
 
       it "can not create PostgreSQL database in a project when does not have permissions" do
@@ -928,7 +929,7 @@ RSpec.describe Clover, "postgres" do
         visit "#{project_wo_permissions.path}#{pg_wo_permission.path}/settings"
         expect(page.title).to eq "Ubicloud - pg-without-permission"
 
-        expect { find ".restart-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".restart-btn"
       end
 
       it "shows metrics if the resource is not creating" do
@@ -1460,7 +1461,7 @@ RSpec.describe Clover, "postgres" do
         visit "#{project_wo_permissions.path}#{pg_wo_permission.path}/settings"
         expect(page.title).to eq "Ubicloud - pg-without-permission"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
     end
 
