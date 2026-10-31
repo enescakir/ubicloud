@@ -835,7 +835,8 @@ RSpec.describe Clover, "vm" do
 
         expect(page.title).to eq("Ubicloud - Create Virtual Machine")
 
-        expect { choose option: "6b9ef786-b842-8420-8c65-c25e3d4bdf3d" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_css "input[type=radio][name=location][value='#{Location::HETZNER_FSN1_UBID}']"
+        expect(page).to have_no_css "input[type=radio][name=location][value='#{Location::GITHUB_RUNNERS_UBID}']"
       end
 
       it "cannot create vm in invisible location" do
@@ -1098,7 +1099,7 @@ RSpec.describe Clover, "vm" do
         visit "#{project_wo_permissions.path}#{vm_wo_permission.path}/settings"
         expect(page.title).to eq "Ubicloud - dummy-vm-2"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
 
       it "can not delete a VM that is being captured as a machine image version" do
