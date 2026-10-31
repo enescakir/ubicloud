@@ -16,7 +16,7 @@ RSpec.describe Clover, "github" do
   end
 
   it "disabled when GitHub app name not provided" do
-    allow(Config).to receive(:github_app_name).and_return(nil)
+    expect(Config).to receive(:github_app_name).and_return(nil).at_least(:once)
 
     visit project.path
     within "#desktop-menu" do
@@ -71,7 +71,7 @@ RSpec.describe Clover, "github" do
     it "shows new billing info button instead of connect account if project has no valid payment method" do
       expect(Config).to receive(:stripe_secret_key).and_return("secret_key").at_least(:once)
       sessions_service = instance_double(Stripe::Checkout::SessionService)
-      allow(StripeClient).to receive(:checkout).and_return(instance_double(Stripe::CheckoutService, sessions: sessions_service))
+      expect(StripeClient).to receive(:checkout).and_return(instance_double(Stripe::CheckoutService, sessions: sessions_service))
 
       # rubocop:disable RSpec/VerifiedDoubles
       expect(sessions_service).to receive(:create).and_return(double(Stripe::Checkout::Session, url: ""))
@@ -138,7 +138,7 @@ RSpec.describe Clover, "github" do
 
     it "shows badge for free premium runner upgrade" do
       now = Time.utc(2026, 6, 1)
-      allow(Time).to receive(:now).and_return(now)
+      expect(Time).to receive(:now).and_return(now).at_least(:once)
       project.set_ff_free_runner_upgrade_until(now + 100)
 
       visit "#{project.path}/github/#{installation.ubid}/setting"
@@ -443,9 +443,6 @@ RSpec.describe Clover, "github" do
       entry1 = create_cache_entry(key: "cache-1")
       entry2 = create_cache_entry(key: "cache-2", repository_id: repository2.id)
       create_cache_entry(key: "cache-3")
-      client = instance_double(Aws::S3::Client)
-      allow(Aws::S3::Client).to receive(:new).and_return(client)
-      allow(client).to receive(:delete_object)
 
       visit "#{project.path}/github/#{installation.ubid}/cache"
       find("#entry-#{entry1.ubid} input[type=checkbox]").check
