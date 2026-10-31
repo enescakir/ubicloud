@@ -45,9 +45,6 @@ RSpec.describe Prog::Vnet::NicNexus do
       aws_location = Location.create(name: "us-west-2", provider: "aws", project_id: project.id, display_name: "aws-us-west-2", ui_name: "AWS US West 2", visible: true)
       LocationCredentialAws.create_with_id(aws_location.id, access_key: "stubbed-akid", secret_key: "stubbed-secret")
       LocationAz.create(location_id: aws_location.id, az: "a", zone_id: "usw2-az1")
-      aws_credentials = Aws::Credentials.new("stubbed-akid", "stubbed-secret")
-      allow(Aws::Credentials).to receive(:new).with("stubbed-akid", "stubbed-secret").and_return(aws_credentials)
-      allow(Aws::EC2::Client).to receive(:new).and_return(Aws::EC2::Client.new(stub_responses: true))
       aws_ps = Prog::Vnet::SubnetNexus.assemble(project.id, name: "test-aws-ps", location_id: aws_location.id).subject
 
       strand = described_class.assemble(aws_ps.id, name: "demonic")
@@ -81,9 +78,6 @@ RSpec.describe Prog::Vnet::NicNexus do
       aws_location = Location.create(name: "us-west-2", provider: "aws", project_id: project.id, display_name: "aws-us-west-2", ui_name: "AWS US West 2", visible: true)
       LocationCredentialAws.create_with_id(aws_location.id, access_key: "stubbed-akid", secret_key: "stubbed-secret")
       LocationAz.create(location_id: aws_location.id, az: "a", zone_id: "usw2-az1")
-      aws_credentials = Aws::Credentials.new("stubbed-akid", "stubbed-secret")
-      allow(Aws::Credentials).to receive(:new).with("stubbed-akid", "stubbed-secret").and_return(aws_credentials)
-      allow(Aws::EC2::Client).to receive(:new).and_return(Aws::EC2::Client.new(stub_responses: true))
       aws_ps = Prog::Vnet::SubnetNexus.assemble(project.id, name: "test-aws-ps", location_id: aws_location.id).subject
 
       expect {
@@ -229,7 +223,7 @@ RSpec.describe Prog::Vnet::NicNexus do
       # Stub SecureRandom to first return the occupied IP offset, then a free one
       subnet_cidr = NetAddr::IPv4Net.parse(aws_subnet.ipv4_cidr.to_s)
       call_count = 0
-      allow(SecureRandom).to receive(:random_number).and_wrap_original do |method, *args|
+      expect(SecureRandom).to receive(:random_number).twice.and_wrap_original do |method, *args|
         call_count += 1
         if call_count <= 1
           # Calculate offset that would produce the existing NIC's IP
