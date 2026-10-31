@@ -25,7 +25,7 @@ RSpec.describe CloverAdmin, "PostgresResource" do
   end
 
   it "links to clover when configured to" do
-    allow(Config).to receive(:clover_admin_links_to_clover).and_return(true)
+    expect(Config).to receive(:clover_admin_links_to_clover).and_return(true)
 
     click_link "PostgresResource"
     expect(page.status_code).to eq 200
