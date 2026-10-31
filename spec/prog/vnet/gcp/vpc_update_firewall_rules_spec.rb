@@ -170,7 +170,6 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
     end
 
     it "creates tag key/value, adds one packed rule, and naps on its LRO" do
-      allow(Clog).to receive(:emit).and_call_original
       expect(crm_client).to receive(:create_tag_key) do |tag_key|
         expect(tag_key.short_name).to eq("ubicloud-fw-#{firewall.ubid}")
         expect(tag_key.purpose).to eq("GCE_FIREWALL")
@@ -188,6 +187,7 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
 
       expect(Clog).to receive(:emit).with("GCP tag key created", hash_including(gcp_tag_key_created: "tagKeys/created-1")).and_call_original
       expect(Clog).to receive(:emit).with("GCP tag value created", hash_including(gcp_tag_value_created: fw_tag_value_name)).and_call_original
+      expect(Clog).to receive(:emit).with("GCP firewall policy mutation submitted", {gcp_policy_rule_op_submitted: hash_including(operation: "op-12345")}).and_call_original
 
       expect { nx.update_firewall_rules }.to nap(5)
       expect(st.stack.first["policy_rule_ops"]).to eq(["op-12345"])
@@ -304,8 +304,8 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
       })
       failed_op = v1::Operation.new(name: "op-12345", status: :DONE, http_error_status_code: 400)
       expect(global_ops_client).to receive(:get).and_return(failed_op)
-      allow(Clog).to receive(:emit).and_call_original
       expect(Clog).to receive(:emit).with("GCP firewall policy mutation failed, rediffing", anything).and_call_original
+      expect(Clog).to receive(:emit).with("GCP firewall policy mutation submitted", {gcp_policy_rule_op_submitted: hash_including(operation: "op-12345")}).and_call_original
 
       expect(nfp_client).to receive(:get).and_return(v1::FirewallPolicy.new(rules: []))
       expect(nfp_client).to receive(:add_rule).and_return(lro_op)
@@ -338,8 +338,8 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
         "policy_rule_ops" => ["op-12345"],
       })
       expect(global_ops_client).to receive(:get).and_raise(Google::Cloud::NotFoundError.new("gone"))
-      allow(Clog).to receive(:emit).and_call_original
       expect(Clog).to receive(:emit).with("GCP firewall policy mutation op expired, rediffing", anything).and_call_original
+      expect(Clog).to receive(:emit).with("GCP firewall policy mutation submitted", {gcp_policy_rule_op_submitted: hash_including(operation: "op-12345")}).and_call_original
 
       expect(nfp_client).to receive(:get).and_return(v1::FirewallPolicy.new(rules: []))
       expect(nfp_client).to receive(:add_rule).and_return(lro_op)
@@ -375,11 +375,11 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
       expect(global_ops_client).to receive(:get).twice.and_return(done_compute_op)
 
       added_rules = []
-      allow(nfp_client).to receive(:add_rule) do |args|
+      expect(nfp_client).to receive(:add_rule).twice do |args|
         added_rules << args[:firewall_policy_rule_resource]
         lro_op
       end
-      allow(nfp_client).to receive(:get) do
+      expect(nfp_client).to receive(:get).thrice do
         v1::FirewallPolicy.new(rules: added_rules.dup)
       end
 
@@ -452,7 +452,7 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
       expect { nx.update_firewall_rules }.to nap(5)
     end
 
-    it "syncs empty rules for firewall with no rules but still creates tag key/value" do
+    it "syncs empty rules for firewall with no rules but still creates tag key/value, then cleans up orphaned rules" do
       fw_rule.destroy
 
       expect(crm_client).to receive(:create_tag_key).and_return(crm_done_op)
@@ -463,6 +463,7 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
         v1::FirewallPolicy.new(rules: []),
       )
       expect(nfp_client).not_to receive(:add_rule)
+      expect(nx).to receive(:cleanup_orphaned_firewall_rules).and_call_original
 
       expect { nx.update_firewall_rules }.to hop("update_firewall_rules", "Vnet::Gcp::VpcNexus")
     end
@@ -484,14 +485,6 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
       expect(crm_client).not_to receive(:create_tag_value)
       expect(nfp_client).not_to receive(:add_rule)
 
-      expect { nx.update_firewall_rules }.to hop("update_firewall_rules", "Vnet::Gcp::VpcNexus")
-    end
-
-    it "runs cleanup_orphaned_firewall_rules after syncing firewalls" do
-      fw_rule.destroy
-      expect(nx).to receive(:cleanup_orphaned_firewall_rules).and_call_original
-      # cleanup_orphaned_firewall_rules calls list_tag_keys; default stub
-      # returns empty list so cleanup is a no-op.
       expect { nx.update_firewall_rules }.to hop("update_firewall_rules", "Vnet::Gcp::VpcNexus")
     end
   end
@@ -1129,14 +1122,8 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
       }.to nap(5)
     end
 
-    it "naps without raising on a transient UnavailableError" do
-      expect {
-        nx.send(:submit_policy_mutations, [-> { raise Google::Cloud::UnavailableError, "unavailable" }])
-      }.to nap(5)
-    end
-
-    it "naps without raising on the other transient statuses, even on the first mutation" do
-      [Google::Cloud::InternalError, Google::Cloud::DeadlineExceededError].each do |klass|
+    it "naps without raising on transient statuses, even on the first mutation" do
+      [Google::Cloud::UnavailableError, Google::Cloud::InternalError, Google::Cloud::DeadlineExceededError].each do |klass|
         expect {
           nx.send(:submit_policy_mutations, [-> { raise klass, "transient" }])
         }.to nap(5)
@@ -1405,22 +1392,13 @@ RSpec.describe Prog::Vnet::Gcp::VpcUpdateFirewallRules do
       nx.send(:cleanup_orphaned_firewall_rules)
     end
 
-    it "skips non-GCE_FIREWALL tag keys" do
+    it "skips non-GCE_FIREWALL tag keys and tag keys without matching short_name prefix" do
       non_fw = instance_double(Google::Apis::CloudresourcemanagerV3::TagKey,
         short_name: "ubicloud-fw-weird", name: "tagKeys/other-1", purpose: nil)
-      expect(crm_client).to receive(:list_tag_keys).and_return(
-        instance_double(Google::Apis::CloudresourcemanagerV3::ListTagKeysResponse, tag_keys: [non_fw], next_page_token: nil),
-      )
-      expect(nfp_client).not_to receive(:get)
-
-      nx.send(:cleanup_orphaned_firewall_rules)
-    end
-
-    it "skips tag keys without matching short_name prefix" do
       subnet_tk = instance_double(Google::Apis::CloudresourcemanagerV3::TagKey,
         short_name: "ubicloud-subnet-x", name: "tagKeys/subnet-1", purpose: "GCE_FIREWALL")
       expect(crm_client).to receive(:list_tag_keys).and_return(
-        instance_double(Google::Apis::CloudresourcemanagerV3::ListTagKeysResponse, tag_keys: [subnet_tk], next_page_token: nil),
+        instance_double(Google::Apis::CloudresourcemanagerV3::ListTagKeysResponse, tag_keys: [non_fw, subnet_tk], next_page_token: nil),
       )
       expect(nfp_client).not_to receive(:get)
 
