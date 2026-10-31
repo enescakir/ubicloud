@@ -368,7 +368,7 @@ RSpec.describe Invoice do
   describe ".generate_download_link" do
     it "generates a presigned URL for PDF" do
       url_presigner = instance_double(Aws::S3::Presigner)
-      allow(Aws::S3::Presigner).to receive(:new).with(client:).and_return(url_presigner)
+      expect(Aws::S3::Presigner).to receive(:new).with(client:).and_return(url_presigner)
 
       url = "https://ubicloud-invoices.something.eu.r2.cloudflare.com/presigned_url"
       expect(url_presigner).to receive(:presigned_url).with(:get_object, {
