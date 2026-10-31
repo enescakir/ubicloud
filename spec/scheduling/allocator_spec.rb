@@ -4,8 +4,8 @@ require_relative "../model/spec_helper"
 require "netaddr"
 
 Al = Scheduling::Allocator
-TestAllocation = Struct.new(:score, :is_valid)
-TestResourceAllocation = Struct.new(:utilization, :is_valid)
+test_allocation = Data.define(:score, :is_valid)
+test_resource_allocation = Data.define(:utilization, :is_valid)
 RSpec.describe Scheduling::Allocator do
   let(:vm) {
     Vm.new(family: "standard", vcpus: 2, cpu_percent_limit: 200, cpu_burst_percent_limit: 0, memory_gib: 8, name: "dummy-vm", arch: "x64", location_id: Location::HETZNER_FSN1_ID, ip4_enabled: "true", created_at: Time.now, unix_user: "", public_key: "", boot_image: "ubuntu-jammy").tap {
@@ -164,12 +164,12 @@ RSpec.describe Scheduling::Allocator do
 
     it "selects the best allocation candidates, up to the maximum host attempts" do
       candidates = [[0.1, false], [5, true], [0.9, true], [99, true]]
-      candidates.each { expect(Al::Allocation).to receive(:new).once.ordered.with(it, req).and_return TestAllocation.new(it[0], it[1]) }
+      candidates.each { expect(Al::Allocation).to receive(:new).once.ordered.with(it, req).and_return test_allocation.new(it[0], it[1]) }
       expect(Al::Allocation).to receive(:candidate_hosts).with(req).and_return(candidates)
       expect(Al::Allocation).to receive(:random_score).and_return(0).at_least(:once)
       expect(Config).to receive(:allocator_max_host_attempts).and_return(2)
 
-      expect(Al::Allocation.ranked_allocations(req)).to eq([TestAllocation.new(0.9, true), TestAllocation.new(5, true)])
+      expect(Al::Allocation.ranked_allocations(req)).to eq([test_allocation.new(0.9, true), test_allocation.new(5, true)])
     end
 
     it "disqualifies invalid candidates" do
@@ -616,9 +616,9 @@ RSpec.describe Scheduling::Allocator do
     end
 
     it "is valid only if all resource allocations are valid" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, false))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, false))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
 
       allocation = Al::Allocation.new(vmhds, req)
       expect(allocation.score).to eq 0
@@ -626,52 +626,52 @@ RSpec.describe Scheduling::Allocator do
     end
 
     it "has score of 0 if all resources are at target utilization" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
 
       expect(Al::Allocation.new(vmhds, req).score).to eq 0
     end
 
     it "is penalized if utilization is below target" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization * 0.9, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization * 0.9, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization * 0.9, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization * 0.9, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization * 0.9, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization * 0.9, true))
       expect(Al::Allocation.new(vmhds, req).score).to be > 0
     end
 
     it "penalizes over-utilization more than under-utilization" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
       score_low_utilization = Al::Allocation.new(vmhds, req).score
 
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization * 1.01, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization * 1.01, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization * 1.01, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization * 1.01, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization * 1.01, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization * 1.01, true))
       score_over_target = Al::Allocation.new(vmhds, req).score
 
       expect(score_over_target).to be > score_low_utilization
     end
 
     it "penalizes imbalance" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(0.5, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(0.5, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(0.5, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(0.5, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(0.5, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(0.5, true))
       score_balance = Al::Allocation.new(vmhds, req).score
 
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(0.4, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(0.5, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(0.6, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(0.4, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(0.5, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(0.6, true))
       score_imbalance = Al::Allocation.new(vmhds, req).score
 
       expect(score_imbalance).to be > score_balance
     end
 
     it "penalizes non-gpu vms on hosts with gpu" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
       vmhds[:location_id] = "6b9ef786-b842-8420-8c65-c25e3d4bdf3d"
       vmhds[:num_gpus] = 1
       req.host_filter = ["15e11815-3d4f-8771-9cac-ce4cdcbda5c1"]
@@ -723,18 +723,18 @@ RSpec.describe Scheduling::Allocator do
     end
 
     it "penalizes concurrent provisioning for github runners" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
       vmhds[:location_id] = "6b9ef786-b842-8420-8c65-c25e3d4bdf3d"
       vmhds[:vm_provisioning_count] = 1
       expect(Al::Allocation.new(vmhds, req).score).to eq(0.5)
     end
 
     it "penalizes AX161 github runners" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
       vmhds[:location_id] = "6b9ef786-b842-8420-8c65-c25e3d4bdf3d"
       vmhds[:total_cores] = 32
       vmhds[:total_cpus] = 64
@@ -742,38 +742,38 @@ RSpec.describe Scheduling::Allocator do
     end
 
     it "adds the host's additional score" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
       vmhds[:score_offset] = -0.7
       expect(Al::Allocation.new(vmhds, req).score).to eq(-0.7)
     end
 
     it "prioritize AX102 github runners for premium CPU testers" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
       vmhds[:location_id] = "6b9ef786-b842-8420-8c65-c25e3d4bdf3d"
       vmhds[:family] = "premium"
       expect(Al::Allocation.new(vmhds, req).score).to eq(-1)
     end
 
     it "respects location preferences" do
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
       score_no_preference = Al::Allocation.new(vmhds, req).score
 
       req.location_preference = [Location::HETZNER_FSN1_ID]
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(0, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(0, true))
       score_preference_met = Al::Allocation.new(vmhds, req).score
 
       req.location_preference = ["6b9ef786-b842-8420-8c65-c25e3d4bdf3d"]
-      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::VmHostAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
-      expect(Al::StorageAllocation).to receive(:new).and_return(TestResourceAllocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostCpuAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::VmHostAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
+      expect(Al::StorageAllocation).to receive(:new).and_return(test_resource_allocation.new(req.target_host_utilization, true))
       score_preference_not_met = Al::Allocation.new(vmhds, req).score
 
       expect(score_no_preference).to be_within(0.0001).of(score_preference_met)
