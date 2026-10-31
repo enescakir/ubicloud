@@ -107,7 +107,7 @@ PGDATA=/dat/17/data
   it "appends hardware-sized wal-g config for aws when the feature is enabled (O_DIRECT on)" do
     postgres_timeline.update(location_id: create_aws_location(name: "us-east-2").id)
     expect(postgres_timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster, url: "https://blob-endpoint"))
-    allow(postgres_timeline).to receive(:leader).and_return(instance_double(PostgresServer,
+    expect(postgres_timeline).to receive(:leader).thrice.and_return(instance_double(PostgresServer,
       resource: instance_double(PostgresResource, project: instance_double(Project, get_ff_postgres_walg_optimized_config_disabled: false, get_ff_postgres_walg_direct_io_disabled: false))))
     server = instance_double(PostgresServer, vm: instance_double(Vm, vcpus: 48, memory_gib: 384),
       storage_device_paths: ["/dev/nvme1n1", "/dev/nvme2n1", "/dev/nvme3n1"],
@@ -124,7 +124,7 @@ PGDATA=/dat/17/data
   it "uses buffered config (no O_DIRECT) when walg_config is on but direct_io is off" do
     postgres_timeline.update(location_id: create_aws_location(name: "us-east-2").id)
     expect(postgres_timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster, url: "https://blob-endpoint"))
-    allow(postgres_timeline).to receive(:leader).and_return(instance_double(PostgresServer,
+    expect(postgres_timeline).to receive(:leader).thrice.and_return(instance_double(PostgresServer,
       resource: instance_double(PostgresResource, project: instance_double(Project, get_ff_postgres_walg_optimized_config_disabled: nil, get_ff_postgres_walg_direct_io_disabled: true))))
     server = instance_double(PostgresServer, vm: instance_double(Vm, vcpus: 48, memory_gib: 384),
       resource: instance_double(PostgresResource, target_vm_size: "i8ge.12xlarge"))
@@ -137,7 +137,7 @@ PGDATA=/dat/17/data
   it "omits wal-g config for aws when the feature is disabled (default no-op)" do
     postgres_timeline.update(location_id: create_aws_location(name: "us-east-2").id)
     expect(postgres_timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster, url: "https://blob-endpoint"))
-    allow(postgres_timeline).to receive(:leader).and_return(instance_double(PostgresServer,
+    expect(postgres_timeline).to receive(:leader).twice.and_return(instance_double(PostgresServer,
       resource: instance_double(PostgresResource, project: instance_double(Project, get_ff_postgres_walg_optimized_config_disabled: true))))
 
     expect(postgres_timeline.generate_walg_config(17, instance_double(PostgresServer))).not_to include("WALG_UPLOAD_DISK_CONCURRENCY")
@@ -146,7 +146,7 @@ PGDATA=/dat/17/data
   it "leaves stock config for aws when enabled but the server has no vm yet" do
     postgres_timeline.update(location_id: create_aws_location(name: "us-east-2").id)
     expect(postgres_timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster, url: "https://blob-endpoint"))
-    allow(postgres_timeline).to receive(:leader).and_return(instance_double(PostgresServer,
+    expect(postgres_timeline).to receive(:leader).twice.and_return(instance_double(PostgresServer,
       resource: instance_double(PostgresResource, project: instance_double(Project, get_ff_postgres_walg_optimized_config_disabled: false))))
 
     expect(postgres_timeline.generate_walg_config(17, instance_double(PostgresServer, vm: nil))).not_to include("WALG_UPLOAD_DISK_CONCURRENCY")
@@ -549,7 +549,7 @@ PGDATA=/dat/17/data
         # retry is bounded rather than a loop over version listings.
         iam_client.stub_responses(:delete_policy, "DeleteConflict")
         iam_client.stub_responses(:list_policy_versions, versions: [{version_id: "v1", is_default_version: false}, {version_id: "v2", is_default_version: true}])
-        allow(iam_client).to receive(:delete_policy_version)
+        expect(iam_client).to receive(:delete_policy_version)
 
         expect(iam_client).to receive(:list_policy_versions).once.and_call_original
         expect(iam_client).to receive(:delete_policy).twice.and_call_original
@@ -756,7 +756,7 @@ PGDATA=/dat/17/data
         ]
         iam_client.stub_responses(:list_policy_versions, {versions: five}, {versions: five})
         iam_client.stub_responses(:create_policy_version, "LimitExceeded")
-        allow(iam_client).to receive(:delete_policy_version)
+        expect(iam_client).to receive(:delete_policy_version).twice
 
         expect(iam_client).to receive(:create_policy_version).twice.and_call_original
         expect { postgres_timeline.refresh_blob_storage_policy }.to raise_error(Aws::IAM::Errors::LimitExceeded)
