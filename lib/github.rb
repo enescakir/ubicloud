@@ -38,6 +38,10 @@ module Github
     Octokit::Client.new(access_token:, auto_paginate:, per_page:)
   end
 
+  def self.user_installation(access_token, installation_id)
+    Octokit::Client.new(access_token:).get("/user/installations")[:installations].find { it[:id].to_s == installation_id }
+  end
+
   # simplecov:disable
   def self.freeze
     runner_labels
