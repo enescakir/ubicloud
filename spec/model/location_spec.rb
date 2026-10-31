@@ -101,126 +101,38 @@ RSpec.describe Location do
     end
   end
 
-  describe "gcp-us-east4 (seeded hidden Postgres location)" do
-    subject(:east4) { described_class[name: "gcp-us-east4"] }
+  n2d_families = %w[n2d-standard n2d-highmem].freeze
+  {
+    "gcp-us-east4" => "Virginia, US (GCP)",
+    "gcp-europe-west3" => "Frankfurt, Germany (GCP)",
+    "gcp-europe-west1" => "Belgium (GCP)",
+  }.each do |name, ui_name|
+    describe "#{name} (seeded hidden Postgres location)" do
+      subject(:location) { described_class[name:] }
 
-    it "is seeded as a hidden GCP location with the expected attributes" do
-      expect(east4).not_to be_nil
-      expect(east4.provider).to eq("gcp")
-      expect(east4.visible).to be(false)
-      expect(east4.display_name).to eq("us-east4")
-      expect(east4.ui_name).to eq("Virginia, US (GCP)")
-    end
-
-    it "has billing rates for every Postgres family in the region (validate_billing_rate passes)" do
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect { Validation.validate_billing_rate("PostgresVCpu", "standard-#{family}", "gcp-us-east4") }.not_to raise_error
-        expect { Validation.validate_billing_rate("PostgresStandbyVCpu", "standard-#{family}", "gcp-us-east4") }.not_to raise_error
+      it "is seeded as a hidden GCP location with the expected attributes" do
+        expect(location).to have_attributes(provider: "gcp", visible: false, display_name: name.delete_prefix("gcp-"), ui_name:)
       end
-      expect { Validation.validate_billing_rate("PostgresStorage", "standard", "gcp-us-east4") }.not_to raise_error
-      expect { Validation.validate_billing_rate("PostgresStandbyStorage", "standard", "gcp-us-east4") }.not_to raise_error
-    end
 
-    it "prices n2d storage on its own meter" do
-      %w[n2d-standard n2d-highmem].each do |family|
-        expect(BillingRate.from_resource_properties("PostgresStorage", "standard-#{family}", "gcp-us-east4")["unit_price"]).to be > 0
-        expect(BillingRate.from_resource_properties("PostgresStandbyStorage", "standard-#{family}", "gcp-us-east4")["unit_price"]).to be > 0
+      it "has billing rates for every Postgres family in the region and the VmVCpu rates the backing Postgres VM needs" do
+        rates = Option::GCP_FAMILY_OPTIONS.flat_map { |family| [["PostgresVCpu", "standard-#{family}"], ["PostgresStandbyVCpu", "standard-#{family}"], ["VmVCpu", family]] }
+        rates += [["PostgresStorage", "standard"], ["PostgresStandbyStorage", "standard"]]
+        expect(rates.reject { |resource_type, family| BillingRate.from_resource_properties(resource_type, family, name) }).to eq []
       end
-    end
 
-    it "has the VmVCpu rates the backing Postgres VM needs (no nil[\"id\"] crash on provisioning)" do
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect(BillingRate.from_resource_properties("VmVCpu", family, "gcp-us-east4")).not_to be_nil
+      it "prices n2d storage on its own meter" do
+        n2d_families.each do |family|
+          expect(BillingRate.from_resource_properties("PostgresStorage", "standard-#{family}", name)["unit_price"]).to be > 0
+          expect(BillingRate.from_resource_properties("PostgresStandbyStorage", "standard-#{family}", name)["unit_price"]).to be > 0
+        end
       end
-    end
 
-    it "stays hidden: excluded from VM listings and from postgres_locations unless flag-listed" do
-      project_id = Project.create(name: "east4-vis-test").id
-      expect(described_class.visible_or_for_project(project_id, []).select_order_map(:name)).not_to include("gcp-us-east4")
-      expect(described_class.postgres_locations.map(&:name)).not_to include("gcp-us-east4")
-      expect(described_class.postgres_locations(["gcp-us-east4"]).map(&:name)).to include("gcp-us-east4")
-    end
-  end
-
-  describe "gcp-europe-west3 (seeded hidden Postgres location)" do
-    subject(:west3) { described_class[name: "gcp-europe-west3"] }
-
-    it "is seeded as a hidden GCP location with the expected attributes" do
-      expect(west3).not_to be_nil
-      expect(west3.provider).to eq("gcp")
-      expect(west3.visible).to be(false)
-      expect(west3.display_name).to eq("europe-west3")
-      expect(west3.ui_name).to eq("Frankfurt, Germany (GCP)")
-    end
-
-    it "has billing rates for every Postgres family in the region (validate_billing_rate passes)" do
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect { Validation.validate_billing_rate("PostgresVCpu", "standard-#{family}", "gcp-europe-west3") }.not_to raise_error
-        expect { Validation.validate_billing_rate("PostgresStandbyVCpu", "standard-#{family}", "gcp-europe-west3") }.not_to raise_error
+      it "stays hidden: excluded from VM listings and from postgres_locations unless flag-listed" do
+        project_id = Project.create(name: "#{name}-vis-test").id
+        expect(described_class.visible_or_for_project(project_id, []).select_order_map(:name)).not_to include(name)
+        expect(described_class.postgres_locations.map(&:name)).not_to include(name)
+        expect(described_class.postgres_locations([name]).map(&:name)).to include(name)
       end
-      expect { Validation.validate_billing_rate("PostgresStorage", "standard", "gcp-europe-west3") }.not_to raise_error
-      expect { Validation.validate_billing_rate("PostgresStandbyStorage", "standard", "gcp-europe-west3") }.not_to raise_error
-    end
-
-    it "prices n2d storage on its own meter" do
-      %w[n2d-standard n2d-highmem].each do |family|
-        expect(BillingRate.from_resource_properties("PostgresStorage", "standard-#{family}", "gcp-europe-west3")["unit_price"]).to be > 0
-        expect(BillingRate.from_resource_properties("PostgresStandbyStorage", "standard-#{family}", "gcp-europe-west3")["unit_price"]).to be > 0
-      end
-    end
-
-    it "has the VmVCpu rates the backing Postgres VM needs (no nil[\"id\"] crash on provisioning)" do
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect(BillingRate.from_resource_properties("VmVCpu", family, "gcp-europe-west3")).not_to be_nil
-      end
-    end
-
-    it "stays hidden: excluded from VM listings and from postgres_locations unless flag-listed" do
-      project_id = Project.create(name: "west3-vis-test").id
-      expect(described_class.visible_or_for_project(project_id, []).select_order_map(:name)).not_to include("gcp-europe-west3")
-      expect(described_class.postgres_locations.map(&:name)).not_to include("gcp-europe-west3")
-      expect(described_class.postgres_locations(["gcp-europe-west3"]).map(&:name)).to include("gcp-europe-west3")
-    end
-  end
-
-  describe "gcp-europe-west1 (seeded hidden Postgres location)" do
-    subject(:west1) { described_class[name: "gcp-europe-west1"] }
-
-    it "is seeded as a hidden GCP location with the expected attributes" do
-      expect(west1).not_to be_nil
-      expect(west1.provider).to eq("gcp")
-      expect(west1.visible).to be(false)
-      expect(west1.display_name).to eq("europe-west1")
-      expect(west1.ui_name).to eq("Belgium (GCP)")
-    end
-
-    it "has billing rates for every Postgres family in the region (validate_billing_rate passes)" do
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect { Validation.validate_billing_rate("PostgresVCpu", "standard-#{family}", "gcp-europe-west1") }.not_to raise_error
-        expect { Validation.validate_billing_rate("PostgresStandbyVCpu", "standard-#{family}", "gcp-europe-west1") }.not_to raise_error
-      end
-      expect { Validation.validate_billing_rate("PostgresStorage", "standard", "gcp-europe-west1") }.not_to raise_error
-      expect { Validation.validate_billing_rate("PostgresStandbyStorage", "standard", "gcp-europe-west1") }.not_to raise_error
-    end
-
-    it "prices n2d storage on its own meter" do
-      %w[n2d-standard n2d-highmem].each do |family|
-        expect(BillingRate.from_resource_properties("PostgresStorage", "standard-#{family}", "gcp-europe-west1")["unit_price"]).to be > 0
-        expect(BillingRate.from_resource_properties("PostgresStandbyStorage", "standard-#{family}", "gcp-europe-west1")["unit_price"]).to be > 0
-      end
-    end
-
-    it "has the VmVCpu rates the backing Postgres VM needs (no nil[\"id\"] crash on provisioning)" do
-      Option::GCP_FAMILY_OPTIONS.each do |family|
-        expect(BillingRate.from_resource_properties("VmVCpu", family, "gcp-europe-west1")).not_to be_nil
-      end
-    end
-
-    it "stays hidden: excluded from VM listings and from postgres_locations unless flag-listed" do
-      project_id = Project.create(name: "west1-vis-test").id
-      expect(described_class.visible_or_for_project(project_id, []).select_order_map(:name)).not_to include("gcp-europe-west1")
-      expect(described_class.postgres_locations.map(&:name)).not_to include("gcp-europe-west1")
-      expect(described_class.postgres_locations(["gcp-europe-west1"]).map(&:name)).to include("gcp-europe-west1")
     end
   end
 
