@@ -90,11 +90,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [ubicloud-standard-8, ubicloud-standard-8-arm]
+        runs-on: [ubicloud-standard-16, ubicloud-standard-16-arm]
         task: [default, frozen_spec]
     name: Ruby specs - ${{matrix.task}} - ${{matrix.runs-on}}
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 25
+    env:
+      CLOVER_MAX_TEST_PROCESSES: 16
 
     steps:
     - name: Check out code
