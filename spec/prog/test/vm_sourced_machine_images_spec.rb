@@ -123,7 +123,7 @@ RSpec.describe Prog::Test::VmSourcedMachineImages do
 
     it "captures the source VM as v<round> and appends the miv id" do
       svc = Project.create(name: "svc")
-      allow(Config).to receive(:machine_images_service_project_id).and_return(svc.id)
+      expect(Config).to receive(:machine_images_service_project_id).and_return(svc.id).twice
       store = MachineImageStore.create(project_id: svc.id, location_id: Location::HETZNER_FSN1_ID,
         provider: "r2", region: "auto", endpoint: "e", bucket: "b", access_key: "a", secret_key: "s")
       prev_metal = create_machine_image_version_metal(project_id: prog.project_id, machine_image_store_id: store.id)
