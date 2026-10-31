@@ -45,7 +45,7 @@ RSpec.describe Prog::Vnet::RekeyNicTunnel do
     end
 
     it "pops when vm is nil" do
-      allow(tunnel.src_nic).to receive(:vm).and_return(nil)
+      expect(tunnel.src_nic).to receive(:vm).and_return(nil)
       expect { nx.before_run }.to exit({"msg" => "nic.destroy semaphore is set or vm is deleting"})
     end
 
