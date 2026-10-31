@@ -27,7 +27,7 @@ RSpec.describe ResourceCredit do
     end
 
     it "allows resource_id when resource_type is set" do
-      expect { create(resource_id: project.id, resource_type: "VmVCpu") }.not_to raise_error
+      expect(create(resource_id: project.id, resource_type: "VmVCpu")).to exist
     end
 
     it "rejects initial_amount below or at 0" do
@@ -36,7 +36,7 @@ RSpec.describe ResourceCredit do
     end
 
     it "allows initial_amount of 1" do
-      expect { create(amount: 1) }.not_to raise_error
+      expect(create(amount: 1)).to exist
     end
 
     it "rejects amount below 0" do
@@ -45,7 +45,8 @@ RSpec.describe ResourceCredit do
 
     it "allows amount of 0" do
       rc = create(amount: 1)
-      expect { rc.update(amount: 0) }.not_to raise_error
+      rc.update(amount: 0)
+      expect(rc.reload.amount).to eq(0)
     end
 
     it "rejects active_to <= active_from" do
@@ -77,12 +78,13 @@ RSpec.describe ResourceCredit do
     end
 
     it "accepts UTC month-start active_from with NULL active_to" do
-      expect { create(active_from: Time.utc(2026, 1, 1)) }.not_to raise_error
+      expect(create(active_from: Time.utc(2026, 1, 1))).to exist
     end
 
     it "allows multiple overlapping wildcard credits for the same project" do
       create({})
-      expect { create({}) }.not_to raise_error
+      create({})
+      expect(described_class.where(project_id: project.id).count).to eq(2)
     end
   end
 
