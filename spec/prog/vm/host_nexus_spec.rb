@@ -56,20 +56,12 @@ RSpec.describe Prog::Vm::HostNexus do
       expect(st.label).to eq("start")
     end
 
-    it "stores vhost_block_backend settings in stack" do
-      st = described_class.assemble("127.0.0.1", vhost_block_backend_version: "v0.2.2")
-      expect(st.stack.first["vhost_block_backend_version"]).to eq("v0.2.2")
+    it "stores vhost_block_backend settings and install_os in stack" do
+      st = described_class.assemble("127.0.0.1", vhost_block_backend_version: "v0.2.2", install_os: true)
+      expect(st.stack.first.values_at("vhost_block_backend_version", "install_os")).to eq(["v0.2.2", true])
 
       st = described_class.assemble("1.2.3.4")
-      expect(st.stack.first["vhost_block_backend_version"]).to eq(Config.vhost_block_backend_version)
-    end
-
-    it "stores install_os in stack" do
-      st = described_class.assemble("127.0.0.1")
-      expect(st.stack.first["install_os"]).to be false
-
-      st = described_class.assemble("1.2.3.4", install_os: true)
-      expect(st.stack.first["install_os"]).to be true
+      expect(st.stack.first.values_at("vhost_block_backend_version", "install_os")).to eq([Config.vhost_block_backend_version, false])
     end
   end
 
@@ -148,7 +140,7 @@ RSpec.describe Prog::Vm::HostNexus do
     end
 
     it "creates addresses and inventory from the leaseweb api" do
-      allow(Config).to receive_messages(
+      expect(Config).to receive_messages(
         leaseweb_connection_string: "https://api.leaseweb.com",
         leaseweb_api_key: "key123",
       )
@@ -195,7 +187,7 @@ RSpec.describe Prog::Vm::HostNexus do
     end
 
     it "creates addresses from the leaseweb-eu org with its own key" do
-      allow(Config).to receive_messages(
+      expect(Config).to receive_messages(
         leaseweb_connection_string: "https://api.leaseweb.com",
         leaseweb_eu_api_key: "eu-key",
       )
@@ -519,16 +511,10 @@ RSpec.describe Prog::Vm::HostNexus do
   end
 
   describe "#patch" do
-    it "runs apply_patches if not running" do
-      expect(nx.vm_host.sshable).to receive(:d_check).with("apply_patches").and_return("NotStarted")
-      expect(nx.vm_host.sshable).to receive(:d_run).with("apply_patches", "sudo", "bash", "-c", "apt update && apt full-upgrade -y")
-      expect { nx.patch }.to nap(60)
-    end
-
-    it "runs apply_patches if failed" do
-      expect(nx.vm_host.sshable).to receive(:d_check).with("apply_patches").and_return("Failed")
-      expect(nx.vm_host.sshable).to receive(:d_run).with("apply_patches", "sudo", "bash", "-c", "apt update && apt full-upgrade -y")
-      expect { nx.patch }.to nap(60)
+    it "runs apply_patches if not running or failed" do
+      expect(nx.vm_host.sshable).to receive(:d_check).with("apply_patches").and_return("NotStarted", "Failed")
+      expect(nx.vm_host.sshable).to receive(:d_run).with("apply_patches", "sudo", "bash", "-c", "apt update && apt full-upgrade -y").twice
+      2.times { expect { nx.patch }.to nap(60) }
     end
 
     it "naps if in progress" do
@@ -708,10 +694,10 @@ RSpec.describe Prog::Vm::HostNexus do
       vm_host.update(allocation_state: "draining")
       Prog::PageNexus.assemble("#{vm_host.ubid} IPv6 DNS egress failing", ["VmHostDnsEgressIpv6", vm_host.id], vm_host.ubid, resource_id: vm_host.id, severity: "warning")
       page = Page.from_tag_parts("VmHostDnsEgressIpv6", vm_host.id)
-      expect(vm_host).to receive(:destroy)
-      expect(sshable).to receive(:destroy)
       expect { nx.destroy }.to exit({"msg" => "vm host deleted"})
       expect(Semaphore.where(strand_id: page.id, name: "resolve").count).to eq(1)
+      expect(vm_host).not_to exist
+      expect(sshable).not_to exist
     end
   end
 
@@ -1022,16 +1008,10 @@ RSpec.describe Prog::Vm::HostNexus do
   end
 
   describe "#available?" do
-    it "returns the available status when disks are healthy" do
-      expect(sshable).to receive(:connect).and_return(nil)
-      expect(vm_host).to receive(:perform_health_checks).and_return(true)
-      expect(nx.available?).to be true
-    end
-
-    it "returns the available status when disks are not healthy" do
-      expect(sshable).to receive(:connect).and_return(nil)
-      allow(vm_host).to receive(:perform_health_checks).and_return(false)
-      expect(nx.available?).to be false
+    it "returns the health of the disks as the available status" do
+      expect(sshable).to receive(:connect).and_return(nil).twice
+      expect(vm_host).to receive(:perform_health_checks).and_return(true, false).twice
+      expect([nx.available?, nx.available?]).to eq [true, false]
     end
 
     it "returns an error trying to connect to VmHost" do
