@@ -27,40 +27,40 @@ RSpec.describe VmStorageVolume do
   it "returns correct spdk version if exists associated installation" do
     si = SpdkInstallation.new(version: "some-version")
     v = described_class.new(disk_index: 7)
-    allow(v).to receive(:spdk_installation).and_return(si)
+    expect(v).to receive(:spdk_installation).and_return(si)
     expect(v.spdk_version).to eq("some-version")
   end
 
   it "returns nil spdk version if no associated installation" do
     v = described_class.new(disk_index: 7)
-    allow(v).to receive(:spdk_installation).and_return(nil)
+    expect(v).to receive(:spdk_installation).and_return(nil)
     expect(v.spdk_version).to be_nil
   end
 
   it "returns correct vhost_block_backend version if exists associated installation" do
     vbb = VhostBlockBackend.new(version_code: 10402)
     v = described_class.new(disk_index: 7)
-    allow(v).to receive(:vhost_block_backend).and_return(vbb)
+    expect(v).to receive(:vhost_block_backend).and_return(vbb)
     expect(v.vhost_block_backend_version).to eq("v1.4.2")
   end
 
   it "returns nil vhost_block_backend version if no associated installation" do
     v = described_class.new(disk_index: 7)
-    allow(v).to receive(:vhost_block_backend).and_return(nil)
+    expect(v).to receive(:vhost_block_backend).and_return(nil)
     expect(v.vhost_block_backend_version).to be_nil
   end
 
   describe "#num_queues" do
     it "returns 1 for SPDK volumes" do
       v = described_class.new(disk_index: 7, vring_workers: 5)
-      allow(v).to receive(:vhost_block_backend).and_return(nil)
+      expect(v).to receive(:vhost_block_backend).and_return(nil)
       expect(v.num_queues).to eq(1)
     end
 
     it "returns vring_workers for vhost_block_backend volumes" do
       vm = Vm.new(vcpus: 4).tap { it.id = "eb3dbcb3-2c90-8b74-8fb4-d62a244d7ae5" }
       v = described_class.new(disk_index: 7, vm:, vring_workers: 5)
-      allow(v).to receive(:vhost_block_backend).and_return(VhostBlockBackend.new)
+      expect(v).to receive(:vhost_block_backend).and_return(VhostBlockBackend.new)
       expect(v.num_queues).to eq(5)
     end
   end
@@ -68,13 +68,13 @@ RSpec.describe VmStorageVolume do
   describe "#queue_size" do
     it "returns 256 for SPDK volumes" do
       v = described_class.new(disk_index: 7)
-      allow(v).to receive(:vhost_block_backend).and_return(nil)
+      expect(v).to receive(:vhost_block_backend).and_return(nil)
       expect(v.queue_size).to eq(256)
     end
 
     it "returns 64 for vhost_block_backend volumes" do
       v = described_class.new(disk_index: 7)
-      allow(v).to receive(:vhost_block_backend).and_return(VhostBlockBackend.new)
+      expect(v).to receive(:vhost_block_backend).and_return(VhostBlockBackend.new)
       expect(v.queue_size).to eq(64)
     end
   end
@@ -96,7 +96,7 @@ RSpec.describe VmStorageVolume do
     it "sends a json payload to the rpc socket and parses the response" do
       vol = described_class.create(vm_id: vm.id, disk_index: 1, storage_device_id: default_storage_device.id, boot: false, size_gib: 10)
       payload = {"command" => "version"}
-      allow(vol.vm.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm.inhost_name}/1/rpc.sock -q 2 -w 2 | head -n 1", stdin: payload.to_json).and_return('{"version":"v0.4.1"}')
+      expect(vol.vm.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm.inhost_name}/1/rpc.sock -q 2 -w 2 | head -n 1", stdin: payload.to_json).and_return('{"version":"v0.4.1"}')
       expect(vol.rpc(**payload)).to eq({"version" => "v0.4.1"})
     end
   end
@@ -106,13 +106,13 @@ RSpec.describe VmStorageVolume do
 
     it "is true when stripes fetched equals source" do
       payload = {"command" => "status"}
-      allow(vol.vm.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm.inhost_name}/1/rpc.sock -q 2 -w 2 | head -n 1", stdin: payload.to_json).and_return('{"status": {"stripes": {"fetched": 100, "source": 100}}}')
+      expect(vol.vm.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm.inhost_name}/1/rpc.sock -q 2 -w 2 | head -n 1", stdin: payload.to_json).and_return('{"status": {"stripes": {"fetched": 100, "source": 100}}}')
       expect(vol.caught_up?).to be true
     end
 
     it "is false when stripes fetched differs from source" do
       payload = {"command" => "status"}
-      allow(vol.vm.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm.inhost_name}/1/rpc.sock -q 2 -w 2 | head -n 1", stdin: payload.to_json).and_return('{"status": {"stripes": {"fetched": 50, "source": 100}}}')
+      expect(vol.vm.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm.inhost_name}/1/rpc.sock -q 2 -w 2 | head -n 1", stdin: payload.to_json).and_return('{"status": {"stripes": {"fetched": 50, "source": 100}}}')
       expect(vol.caught_up?).to be false
     end
   end
