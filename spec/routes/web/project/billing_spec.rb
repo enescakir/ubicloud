@@ -26,7 +26,7 @@ RSpec.describe Clover, "billing" do
   end
 
   it "disabled when Stripe secret key not provided" do
-    allow(Config).to receive(:stripe_secret_key).and_return(nil)
+    expect(Config).to receive(:stripe_secret_key).and_return(nil).thrice
 
     visit project.path
     within "#desktop-menu" do
@@ -556,7 +556,7 @@ RSpec.describe Clover, "billing" do
         invoice = InvoiceGenerator.new(bi.span.begin, bi.span.end, save_result: true, eur_rate: 1.1).run.first
         invoice.update(status: "current")
         generator = InvoiceGenerator.new(bi.span.begin, bi.span.end, project_ids: [billing_info.project.id])
-        allow(generator).to receive(:run).and_return([invoice])
+        expect(generator).to receive(:run).and_return([invoice]).thrice
         expect(InvoiceGenerator).to receive(:new).and_return(generator).at_least(:once)
 
         visit "#{project.path}/billing/invoice/current"
@@ -598,7 +598,7 @@ RSpec.describe Clover, "billing" do
         invoice = InvoiceGenerator.new(bi.span.begin, bi.span.end, save_result: true, eur_rate: 1.1).run.first
         invoice.update(status: "current")
         generator = InvoiceGenerator.new(bi.span.begin, bi.span.end, project_ids: [billing_info.project.id])
-        allow(generator).to receive(:run).and_return([invoice])
+        expect(generator).to receive(:run).and_return([invoice])
         expect(InvoiceGenerator).to receive(:new).and_return(generator).at_least(:once)
 
         visit "#{project.path}/billing/invoice/current"
