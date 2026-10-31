@@ -51,46 +51,20 @@ RSpec.describe Prog::Vnet::CertNexus do
   end
 
   describe ".assemble" do
-    it "creates a new certificate" do
+    it "creates a new certificate without auto restarts by default" do
       st = described_class.assemble("test-hostname", dns_zone.id)
-      expect(st.subject.hostname).to eq "test-hostname"
       expect(st.label).to eq "start"
-      cert = st.subject
-      expect(cert.hostname).to eq "test-hostname"
-      expect(cert.private_hostname).to be_nil
-    end
-
-    it "supports private_hostname argument" do
-      st = described_class.assemble("test-hostname", dns_zone.id, private_hostname: "private.test-hostname")
-      cert = st.subject
-      expect(cert.hostname).to eq "test-hostname"
-      expect(cert.private_hostname).to eq "private.test-hostname"
-    end
-
-    it "supports waiting_strand_id argument" do
-      waiting_strand_id = Strand.generate_uuid
-      st = described_class.assemble("test-hostname", dns_zone.id, waiting_strand_id:)
-      cert = st.subject
-      expect(cert.hostname).to eq "test-hostname"
-      expect(st.stack[0]["waiting_strand_id"]).to eq waiting_strand_id
-    end
-
-    it "supports wait_dealine: argument" do
-      st = described_class.assemble("test-hostname", dns_zone.id, wait_deadline: 100)
-      expect(st.subject.hostname).to eq "test-hostname"
-      expect(st.stack[0]["wait_deadline"]).to eq 100
-    end
-
-    it "supports wakeup_semaphore: argument" do
-      st = described_class.assemble("test-hostname", dns_zone.id, wakeup_semaphore: "cert_renewed")
-      expect(st.stack[0]["wakeup_semaphore"]).to eq "cert_renewed"
-    end
-
-    it "does not enable auto restarts by default" do
-      st = described_class.assemble("test-hostname", dns_zone.id)
-      expect(st.stack[0]["remaining_auto_restarts"]).to eq 0
-      expect(st.stack[0]["wait_deadline"]).to be_nil
+      expect(st.subject).to have_attributes(hostname: "test-hostname", private_hostname: nil)
+      expect(st.stack[0].values_at("remaining_auto_restarts", "wait_deadline")).to eq [0, nil]
       expect(st.stack[0]["last_restart_time"]).to be_within(10).of(Time.now.to_i)
+    end
+
+    it "supports private_hostname, waiting_strand_id, wakeup_semaphore, and num_auto_restarts with a given wait_deadline" do
+      waiting_strand_id = Strand.generate_uuid
+      st = described_class.assemble("test-hostname", dns_zone.id, private_hostname: "private.test-hostname", waiting_strand_id:,
+        wakeup_semaphore: "cert_renewed", num_auto_restarts: 3, wait_deadline: 100)
+      expect(st.subject).to have_attributes(hostname: "test-hostname", private_hostname: "private.test-hostname")
+      expect(st.stack[0].values_at("waiting_strand_id", "wakeup_semaphore", "remaining_auto_restarts", "wait_deadline")).to eq [waiting_strand_id, "cert_renewed", 3, 100]
     end
 
     it "supports num_auto_restarts: argument, defaulting wait_deadline" do
@@ -99,14 +73,8 @@ RSpec.describe Prog::Vnet::CertNexus do
       expect(st.stack[0]["wait_deadline"]).to eq described_class::AUTO_RESTART_WAIT_DEADLINE
     end
 
-    it "does not override given wait_deadline when using num_auto_restarts:" do
-      st = described_class.assemble("test-hostname", dns_zone.id, num_auto_restarts: 3, wait_deadline: 100)
-      expect(st.stack[0]["remaining_auto_restarts"]).to eq 3
-      expect(st.stack[0]["wait_deadline"]).to eq 100
-    end
-
     it "fails if dns_zone is not valid" do
-      id = SecureRandom.uuid
+      id = DnsZone.generate_uuid
       expect {
         described_class.assemble("test-hostname", id)
       }.to raise_error RuntimeError, "Given DNS zone doesn't exist with the id #{id}"
