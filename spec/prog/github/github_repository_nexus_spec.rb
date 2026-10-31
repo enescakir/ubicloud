@@ -253,7 +253,7 @@ RSpec.describe Prog::Github::GithubRepositoryNexus do
       repository.update(access_key: "key")
       expect(Config).to receive(:enable_github_workflow_poller).and_return(false)
       transaction_started = false
-      allow(DB).to receive(:transaction).and_wrap_original do |m, *args, **kwargs, &block|
+      expect(DB).to receive(:transaction).at_least(:once).and_wrap_original do |m, *args, **kwargs, &block|
         transaction_started = true if kwargs == {savepoint: true}
         m.call(*args, **kwargs, &block)
       end
@@ -355,7 +355,7 @@ RSpec.describe Prog::Github::GithubRepositoryNexus do
         GithubCacheEntry.create(repository_id: repository.id, key: "k#{it}", version: "v#{it}", scope: "main", upload_id: "upload-#{it}", committed_at: Time.now, created_by: "3c9a861c-ab14-8218-a175-875ebb652f7b")
       end
       blob_storage_client = instance_double(Aws::S3::Client)
-      allow(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
+      expect(Aws::S3::Client).to receive(:new).and_return(blob_storage_client).twice
       entries.each do |entry|
         expect(blob_storage_client).to receive(:delete_object).with(bucket: repository.bucket_name, key: entry.blob_key)
       end
@@ -375,7 +375,7 @@ RSpec.describe Prog::Github::GithubRepositoryNexus do
       st.update(label: "destroy")
       repository.incr_destroying
       in_transaction = false
-      allow(DB).to receive(:transaction).and_wrap_original do |m, *args, **kwargs, &block|
+      expect(DB).to receive(:transaction).at_least(:once).and_wrap_original do |m, *args, **kwargs, &block|
         if kwargs == {savepoint: true}
           begin
             in_transaction = true
@@ -388,7 +388,7 @@ RSpec.describe Prog::Github::GithubRepositoryNexus do
         end
       end
       blob_storage_client = instance_double(Aws::S3::Client)
-      allow(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
+      expect(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
       expect(blob_storage_client).to receive(:delete_object) do
         expect(in_transaction).to be false
       end
