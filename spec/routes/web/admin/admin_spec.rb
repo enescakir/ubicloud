@@ -613,7 +613,7 @@ RSpec.describe CloverAdmin do
   it "shows stripe data for billing info as extra" do
     expect(Config).to receive(:stripe_secret_key).and_return("secret_key").at_least(:once)
     customers_service = instance_double(Stripe::CustomerService)
-    allow(StripeClient).to receive(:customers).and_return(customers_service)
+    expect(StripeClient).to receive(:customers).and_return(customers_service).at_least(:once)
     billing_info = BillingInfo.create(stripe_id: "cus_test123")
     expect(customers_service).to receive(:retrieve).with("cus_test123").and_return({"name" => "ACME Inc.", "metadata" => {"tax_id" => "123456"}, "address" => {"line1" => "123 Main St", "country" => "US"}}).at_least(:once)
     visit "/model/BillingInfo/#{billing_info.ubid}"
@@ -643,9 +643,9 @@ RSpec.describe CloverAdmin do
   it "supports validating VAT for BillingInfo" do
     expect(Config).to receive(:stripe_secret_key).and_return("secret_key").at_least(:once)
     customers_service = instance_double(Stripe::CustomerService)
-    allow(StripeClient).to receive(:customers).and_return(customers_service)
+    expect(StripeClient).to receive(:customers).and_return(customers_service).at_least(:once)
     stripe_customer = {"name" => "ACME Inc.", "metadata" => {"tax_id" => "NL123456789B01"}, "address" => {"line1" => "Main Street 1", "country" => "NL"}}
-    allow(customers_service).to receive(:retrieve).with("cus_vat123").and_return(stripe_customer)
+    expect(customers_service).to receive(:retrieve).with("cus_vat123").and_return(stripe_customer).at_least(:once)
     billing_info = BillingInfo.create(stripe_id: "cus_vat123")
     path = "/model/BillingInfo/#{billing_info.ubid}/validate-vat"
 
@@ -663,7 +663,7 @@ RSpec.describe CloverAdmin do
   it "shows stripe data for payment method as extra" do
     expect(Config).to receive(:stripe_secret_key).and_return("secret_key").at_least(:once)
     payment_methods_service = instance_double(Stripe::PaymentMethodService)
-    allow(StripeClient).to receive(:payment_methods).and_return(payment_methods_service)
+    expect(StripeClient).to receive(:payment_methods).and_return(payment_methods_service)
     billing_info = BillingInfo.create(stripe_id: "cus_test123")
     payment_method = PaymentMethod.create(billing_info_id: billing_info.id, stripe_id: "pm_1234567890")
     expect(payment_methods_service).to receive(:retrieve).with("pm_1234567890").and_return(Stripe::StripeObject.construct_from(id: "pm_1234567890", card: {brand: "Visa", last4: "1234", exp_month: 12, exp_year: 2023, country: "NL", funding: "debit", wallet: {type: "apple_pay"}, checks: {address_line1_check: "pass", cvc_check: "pass"}}))
@@ -1662,11 +1662,6 @@ RSpec.describe CloverAdmin do
       it.server_identifier = "123"
       it.provider_name = HostProvider::HETZNER_PROVIDER_NAME
     end
-    allow(Config).to receive_messages(
-      hetzner_connection_string: "https://robot-ws.your-server.de",
-      hetzner_user: "user1",
-      hetzner_password: "pass",
-    )
     stub_request(:get, "https://robot-ws.your-server.de/reset/123").to_return(status: 200, body: JSON.generate(reset: {operating_status: "shut off"}))
     stub_request(:post, "https://robot-ws.your-server.de/reset/123").with(body: "type=power").to_return(status: 200, body: "")
 
@@ -1687,11 +1682,6 @@ RSpec.describe CloverAdmin do
       it.server_identifier = "123"
       it.provider_name = HostProvider::HETZNER_PROVIDER_NAME
     end
-    allow(Config).to receive_messages(
-      hetzner_connection_string: "https://robot-ws.your-server.de",
-      hetzner_user: "user1",
-      hetzner_password: "pass",
-    )
     stub_request(:get, "https://robot-ws.your-server.de/reset/123").to_return(status: 200, body: JSON.generate(reset: {operating_status: "shut off"}))
 
     fill_in "UBID, UUID, or prefix:term", with: vmh.ubid
@@ -3258,39 +3248,21 @@ RSpec.describe CloverAdmin do
       ]
     end
 
-    it "allows setting up a vm host without boot images or OS install" do
-      stub_hetzner_rename("54321")
+    it "allows setting up multiple vm hosts without boot images or OS install" do
+      stub_hetzner_rename("12345", "54321")
 
-      fill_in "Hosts", with: "54321,1.2.3.5"
+      fill_in "Hosts", with: "12345,1.2.3.4\n\n 54321 , 1.2.3.5 \n"
       select "hetzner-fsn1", from: "Location"
       select "premium", from: "Family"
       select "hetzner", from: "Provider"
       fill_in "Vhost Block Backend Version", with: "v0.2.2"
       click_button "Setup VM Hosts"
 
-      st = Strand.first(prog: "Vm::HostNexus")
-      expect(page).to have_flash_notice("VM host setup started: #{st.ubid} (hetzner 54321)")
-      expect(VmHost[st.id].family).to eq "premium"
-
-      frame = st.stack.first
-      expect(frame["vhost_block_backend_version"]).to eq "v0.2.2"
-      expect(frame["default_boot_images"]).to eq []
-      expect(frame["install_os"]).to be false
-    end
-
-    it "allows setting up multiple vm hosts" do
-      stub_hetzner_rename("12345", "54321")
-
-      fill_in "Hosts", with: "12345,1.2.3.4\n\n 54321 , 1.2.3.5 \n"
-      select "hetzner-fsn1", from: "Location"
-      select "hetzner", from: "Provider"
-      click_button "Setup VM Hosts"
-
       vmh1 = VmHost.first(sshable: Sshable.where(host: "1.2.3.4"))
       vmh2 = VmHost.first(sshable: Sshable.where(host: "1.2.3.5"))
       expect(page).to have_flash_notice("VM host setup started: #{vmh1.ubid} (hetzner 12345), #{vmh2.ubid} (hetzner 54321)")
-      expect(vmh1.provider.server_identifier).to eq "12345"
-      expect(vmh2.provider.server_identifier).to eq "54321"
+      expect([vmh1, vmh2].map { [it.provider.server_identifier, it.family] }).to eq [["12345", "premium"], ["54321", "premium"]]
+      expect([vmh1, vmh2].map { it.strand.stack.first.values_at("vhost_block_backend_version", "default_boot_images", "install_os") }).to eq [["v0.2.2", [], false]] * 2
     end
 
     it "raises error for an address that is not IPv4" do
@@ -3416,22 +3388,16 @@ RSpec.describe CloverAdmin do
     expect(page.title).to eq "Ubicloud Admin - Vm #{vm.ubid}"
   end
 
-  it "shows footer with the commit hash" do
+  it "shows footer with the time, and the commit hash when it is known" do
     now = Time.now.utc
     expect(Time).to receive(:now).and_return(now).at_least(:once)
-    expect(Config).to receive(:git_commit_hash).and_return("abc1234").at_least(:once)
+    expect(Config).to receive(:git_commit_hash).and_return("abc1234", nil).at_least(:once)
     visit "/"
-    expect(page).to have_content(now.to_s)
-    expect(page).to have_content(/commit: abc1234/)
-  end
-
-  it "shows footer without the commit hash" do
-    now = Time.now.utc
-    expect(Time).to receive(:now).and_return(now).at_least(:once)
-    expect(Config).to receive(:git_commit_hash).and_return(nil).at_least(:once)
+    expect(page.find("footer")).to have_content(now.to_s)
+    expect(page.find("footer")).to have_content("commit: abc1234")
     visit "/"
-    expect(page).to have_content(now.to_s)
-    expect(page).to have_no_content(/commit:/)
+    expect(page.find("footer")).to have_content(now.to_s)
+    expect(page.find("footer")).to have_no_content("commit:")
   end
 
   it "shows staging environment in footer" do
@@ -3859,24 +3825,8 @@ RSpec.describe CloverAdmin do
   describe "format_seconds" do
     let(:app) { described_class.allocate }
 
-    it "formats zero" do
-      expect(app.format_seconds(0)).to eq "00:00:00"
-    end
-
-    it "formats seconds only" do
-      expect(app.format_seconds(45)).to eq "00:00:45"
-    end
-
-    it "formats minutes and seconds" do
-      expect(app.format_seconds(125)).to eq "00:02:05"
-    end
-
-    it "formats hours, minutes, and seconds" do
-      expect(app.format_seconds(3661)).to eq "01:01:01"
-    end
-
-    it "format allows for more than 2 digits in hour" do
-      expect(app.format_seconds(999999)).to eq "277:46:39"
+    it "formats seconds as hours, minutes, and seconds, allowing more than 2 digits in hour" do
+      expect([0, 45, 125, 3661, 999999].map { app.format_seconds(it) }).to eq ["00:00:00", "00:00:45", "00:02:05", "01:01:01", "277:46:39"]
     end
   end
 
