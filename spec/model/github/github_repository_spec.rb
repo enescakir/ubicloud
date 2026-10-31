@@ -107,7 +107,7 @@ RSpec.describe GithubRepository do
     end
 
     it "prefixes the bucket and token names with e2e in e2e runs" do
-      allow(Config).to receive(:is_e2e).and_return(true)
+      expect(Config).to receive(:is_e2e).and_return(true).twice
       expect(blob_storage_client).to receive(:create_bucket).with(hash_including(bucket: "e2e-#{github_repository.ubid}"))
       expect(cloudflare_client).to receive(:create_token).with("e2e-#{github_repository.ubid}-token", instance_of(Array)).and_return(["test-key", "test-secret"])
       github_repository.setup_blob_storage
