@@ -83,8 +83,8 @@ RSpec.describe InferenceEndpoint do
 
     it "sends the request correctly" do
       if development
-        allow(Config).to receive(:development?).and_return(true)
-        allow(http).to receive(:verify_mode=).with(OpenSSL::SSL::VERIFY_NONE)
+        expect(Config).to receive(:development?).and_return(true)
+        expect(http).to receive(:verify_mode=).with(OpenSSL::SSL::VERIFY_NONE)
       end
 
       expect(http).to receive(:request) do |req|
