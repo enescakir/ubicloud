@@ -97,28 +97,16 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(pv.vm.vm_firewalls).to eq [pg.internal_firewall]
     end
 
-    it "picks correct base image for AWS-pg16" do
-      ami = PgAwsAmi[aws_location_name: "us-west-2", pg_version: "16", arch: "x64", family: "ubuntu-2204"]
+    it "picks correct base image for AWS by PostgreSQL version" do
+      boot_images = %w[16 17].map do |version|
+        aws_resource = create_postgres_resource(project: user_project, location_id: aws_location.id)
+        aws_resource.update(target_version: version)
+        Firewall.create(name: "#{aws_resource.ubid}-internal-firewall", location: aws_location, project: service_project)
+        postgres_timeline = create_postgres_timeline(location_id: aws_location.id)
 
-      aws_resource = create_postgres_resource(project: user_project, location_id: aws_location.id)
-      aws_resource.update(target_version: "16")
-      Firewall.create(name: "#{aws_resource.ubid}-internal-firewall", location: aws_location, project: service_project)
-      postgres_timeline = create_postgres_timeline(location_id: aws_location.id)
-
-      st = described_class.assemble(resource_id: aws_resource.id, timeline_id: postgres_timeline.id, timeline_access: "push", is_representative: true)
-      expect(st.subject.vm.boot_image).to eq(ami.aws_ami_id)
-    end
-
-    it "picks correct base image for AWS-pg17" do
-      ami = PgAwsAmi[aws_location_name: "us-west-2", pg_version: "17", arch: "x64", family: "ubuntu-2204"]
-
-      aws_resource = create_postgres_resource(project: user_project, location_id: aws_location.id)
-      aws_resource.update(target_version: "17")
-      Firewall.create(name: "#{aws_resource.ubid}-internal-firewall", location: aws_location, project: service_project)
-      postgres_timeline = create_postgres_timeline(location_id: aws_location.id)
-
-      st = described_class.assemble(resource_id: aws_resource.id, timeline_id: postgres_timeline.id, timeline_access: "push", is_representative: true)
-      expect(st.subject.vm.boot_image).to eq(ami.aws_ami_id)
+        described_class.assemble(resource_id: aws_resource.id, timeline_id: postgres_timeline.id, timeline_access: "push", is_representative: true).subject.vm.boot_image
+      end
+      expect(boot_images).to eq(%w[16 17].map { PgAwsAmi[aws_location_name: "us-west-2", pg_version: it, arch: "x64", family: "ubuntu-2204"].aws_ami_id })
     end
 
     it "requests a separate management nic only for AWS" do
@@ -304,36 +292,29 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
 
   describe "#run_migrations" do
     it "skips the migrator and returns to wait on a read replica" do
-      expect(server).to receive(:read_replica?).and_return(true)
+      postgres_resource.update(parent_id: create_postgres_resource(project:, location_id:).id)
       expect(sshable).not_to receive(:d_check)
       expect { nx.run_migrations }.to hop("wait")
     end
 
     it "skips the migrator and returns to wait on a standby" do
-      expect(server).to receive(:read_replica?).and_return(false)
-      expect(server).to receive(:primary?).and_return(false)
+      server.update(timeline_access: "fetch")
       expect(sshable).not_to receive(:d_check)
       expect { nx.run_migrations }.to hop("wait")
     end
 
     it "launches the migrator on the primary if not started" do
-      expect(server).to receive(:read_replica?).and_return(false)
-      expect(server).to receive(:primary?).and_return(true)
       expect(sshable).to receive(:d_check).with("migrate").and_return("NotStarted")
       expect(sshable).to receive(:d_run).with("migrate", "sudo", "postgres/bin/migrate")
       expect { nx.run_migrations }.to nap(5)
     end
 
     it "naps while the migrator is in progress on the primary" do
-      expect(server).to receive(:read_replica?).and_return(false)
-      expect(server).to receive(:primary?).and_return(true)
       expect(sshable).to receive(:d_check).with("migrate").and_return("InProgress")
       expect { nx.run_migrations }.to nap(5)
     end
 
     it "cleans the daemon and hops to wait once the migrator succeeds on the primary" do
-      expect(server).to receive(:read_replica?).and_return(false)
-      expect(server).to receive(:primary?).and_return(true)
       expect(sshable).to receive(:d_check).with("migrate").and_return("Succeeded")
       expect(sshable).to receive(:d_clean).with("migrate")
       expect { nx.run_migrations }.to hop("wait")
@@ -546,6 +527,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       # Failed
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check initialize_database_from_backup").and_return("Failed")
       expect { nx.initialize_database_from_backup }.to nap(5)
+      expect(nx.strand.stack[0]["initialize_database_from_backup_try_count"]).to eq(2)
     end
 
     it "resolves page, cleans up the stack and hops if initialize_database_from_backup command is succeeded" do
@@ -616,20 +598,11 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(frame_value(standby_nx, "disk_usage")).to eq(2048000)
     end
 
-    it "increments try count on Failed" do
-      postgres_resource.update(restore_target: Time.now)
-      expect(server.timeline).to receive(:latest_backup_label_before_target).and_return("backup-label")
-      expect(sshable).to receive(:_cmd).with(/daemonizer2 run/, anything)
-      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check initialize_database_from_backup").and_return("Failed")
-      expect { nx.initialize_database_from_backup }.to nap(5)
-      expect(nx.strand.stack[0]["initialize_database_from_backup_try_count"]).to eq(1)
-    end
-
     it "creates a page when try count reaches 3" do
       refresh_frame(nx, new_values: {"initialize_database_from_backup_try_count" => 3})
       postgres_resource.update(restore_target: Time.now)
       expect(server.timeline).to receive(:latest_backup_label_before_target).and_return("backup-label")
-      expect(sshable).to receive(:_cmd).with(/daemonizer2 run/, anything)
+      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 run initialize_database_from_backup sudo postgres/bin/initialize-database-from-backup 18 backup-label true recovery", {log: true, stdin: nil})
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check initialize_database_from_backup").and_return("Failed")
 
       expect { nx.initialize_database_from_backup }.to nap(5)
@@ -924,43 +897,6 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       allow(nx.postgres_server).to receive(:logs_config).and_return(logs_config)
     end
 
-    it "runs configure-logs even if a parseable resource is available but log aggregation is not setup yet" do
-      ParseableResource.create(
-        project_id: Config.postgres_service_project_id,
-        location_id: Location::HETZNER_FSN1_ID,
-        private_subnet_id: private_subnet.id,
-        name: "test-parseable",
-        admin_user: "admin",
-        admin_password: "test-password",
-        blob_storage_access_key: "access-key-1234",
-        blob_storage_secret_key: "secret-key-5678",
-        target_vm_size: "standard-2",
-        target_storage_size_gib: 100,
-      )
-      expect(sshable).to receive(:d_check).with("configure_logs").and_return("NotStarted")
-      expect(sshable).to receive(:d_run).with("configure_logs", "/home/ubi/postgres/bin/configure-logs", stdin: logs_config.to_json)
-      expect { nx.configure_logs }.to nap(5)
-    end
-
-    it "runs configure-logs when NotStarted and log aggregation is setup" do
-      ParseableResource.create(
-        project_id: Config.postgres_service_project_id,
-        location_id: Location::HETZNER_FSN1_ID,
-        private_subnet_id: private_subnet.id,
-        name: "test-parseable",
-        admin_user: "admin",
-        admin_password: "test-password",
-        blob_storage_access_key: "access-key-1234",
-        blob_storage_secret_key: "secret-key-5678",
-        target_vm_size: "standard-2",
-        target_storage_size_gib: 100,
-      )
-      postgres_resource.update(parseable_password: "dummy")
-      expect(sshable).to receive(:d_check).with("configure_logs").and_return("NotStarted")
-      expect(sshable).to receive(:d_run).with("configure_logs", "/home/ubi/postgres/bin/configure-logs", stdin: logs_config.to_json)
-      expect { nx.configure_logs }.to nap(5)
-    end
-
     it "runs configure-logs when NotStarted" do
       expect(sshable).to receive(:d_check).with("configure_logs").and_return("NotStarted")
       expect(sshable).to receive(:d_run).with("configure_logs", "/home/ubi/postgres/bin/configure-logs", stdin: logs_config.to_json)
@@ -1143,16 +1079,10 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect { nx.run_post_installation_script }.to hop("wait")
     end
 
-    it "starts the post installation script when not started" do
-      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("NotStarted")
-      expect(sshable).to receive(:d_run).with("post_installation_script", "sudo", "postgres/bin/post-installation-script")
-      expect { nx.run_post_installation_script }.to nap(1)
-    end
-
-    it "starts the post installation script when failed" do
-      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("Failed")
-      expect(sshable).to receive(:d_run).with("post_installation_script", "sudo", "postgres/bin/post-installation-script")
-      expect { nx.run_post_installation_script }.to nap(1)
+    it "starts the post installation script when not started or failed" do
+      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("NotStarted", "Failed")
+      expect(sshable).to receive(:d_run).with("post_installation_script", "sudo", "postgres/bin/post-installation-script").twice
+      2.times { expect { nx.run_post_installation_script }.to nap(1) }
     end
 
     it "naps when the post installation script is still running" do
@@ -1862,16 +1792,10 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
   end
 
   describe "#promote_read_replica" do
-    it "runs promote command if not started yet" do
-      expect(sshable).to receive(:d_check).with("promote_postgres").and_return("NotStarted")
-      expect(sshable).to receive(:d_run).with("promote_postgres", "sudo", "postgres/bin/promote", "18")
-      expect { nx.promote_read_replica }.to nap(5)
-    end
-
-    it "retries promote command if previous run failed" do
-      expect(sshable).to receive(:d_check).with("promote_postgres").and_return("Failed")
-      expect(sshable).to receive(:d_run).with("promote_postgres", "sudo", "postgres/bin/promote", "18")
-      expect { nx.promote_read_replica }.to nap(5)
+    it "runs promote command if not started yet, or again if the previous run failed" do
+      expect(sshable).to receive(:d_check).with("promote_postgres").and_return("NotStarted", "Failed")
+      expect(sshable).to receive(:d_run).with("promote_postgres", "sudo", "postgres/bin/promote", "18").twice
+      2.times { expect { nx.promote_read_replica }.to nap(5) }
     end
 
     it "cleans up and hops to configure when Succeeded" do
