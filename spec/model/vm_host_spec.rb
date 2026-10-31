@@ -235,23 +235,16 @@ RSpec.describe VmHost do
       end
     end
 
-    it "is false without a provider" do
-      expect(vm_host.leaseweb?).to be false
-    end
-
-    it "is false for hetzner" do
+    it "is true only for the base and eu leaseweb orgs, and #provider_name follows the provider" do
+      expect([vm_host.leaseweb?, vm_host.provider_name]).to eq [false, nil]
       make_provider(HostProvider::HETZNER_PROVIDER_NAME)
-      expect(vm_host.leaseweb?).to be false
-    end
-
-    it "is true for the base org" do
-      make_provider(HostProvider::LEASEWEB_PROVIDER_NAME)
-      expect(vm_host.leaseweb?).to be true
-    end
-
-    it "is true for the eu org" do
-      make_provider(HostProvider::LEASEWEB_EU_PROVIDER_NAME)
-      expect(vm_host.leaseweb?).to be true
+      names = [HostProvider::HETZNER_PROVIDER_NAME, HostProvider::LEASEWEB_PROVIDER_NAME, HostProvider::LEASEWEB_EU_PROVIDER_NAME]
+      results = names.map do |provider_name|
+        HostProvider.where(id: vm_host.id).update(provider_name:)
+        vm_host.reload
+        [vm_host.leaseweb?, vm_host.provider_name]
+      end
+      expect(results).to eq [[false, names[0]], [true, names[1]], [true, names[2]]]
     end
   end
 
@@ -312,7 +305,7 @@ RSpec.describe VmHost do
       vm_host.sshable.update(host: "1.1.0.0")
       Sshable.create(host: "1.1.1.1")
 
-      expect { vm_host.create_addresses(ip_records: hetzner_ips) }.to change { vm_host.assigned_subnets_dataset.count }.by(4)
+      expect { vm_host.create_addresses(ip_records: hetzner_ips) }.to change { vm_host.assigned_subnets_dataset.count }.from(0).to(4)
     end
 
     it "creates addresses" do
@@ -320,8 +313,8 @@ RSpec.describe VmHost do
       vm_host.sshable.update(host: "1.1.0.0")
       Sshable.create(host: "1.1.1.1")
       expect { vm_host.create_addresses }
-        .to change { vm_host.assigned_subnets_dataset.count }.by(4)
-        .and change { Strand.where(prog: "SetupNftables").count }.by(1)
+        .to change { vm_host.assigned_subnets_dataset.count }.from(0).to(4)
+        .and change { Strand.where(prog: "SetupNftables").count }.from(0).to(1)
     end
 
     it "does not setup nftables while preparing the vm host" do
@@ -330,7 +323,7 @@ RSpec.describe VmHost do
       Sshable.create(host: "1.1.1.1")
       vm_host.update(allocation_state: "unprepared")
       expect { vm_host.create_addresses }
-        .to change { vm_host.assigned_subnets_dataset.count }.by(4)
+        .to change { vm_host.assigned_subnets_dataset.count }.from(0).to(4)
         .and not_change { Strand.where(prog: "SetupNftables").count }
     end
 
@@ -345,7 +338,7 @@ RSpec.describe VmHost do
       vm_host.sshable.update(host: "1.1.0.0")
       Sshable.create(host: "1.1.1.1")
       Address.create(cidr: NetAddr::IPv4Net.parse("1.1.1.0/30"), routed_to_host_id: vm_host.id)
-      expect { vm_host.create_addresses }.to change { vm_host.assigned_subnets_dataset.count }.by(3)
+      expect { vm_host.create_addresses }.to change { vm_host.assigned_subnets_dataset.count }.from(1).to(4)
     end
 
     it "fails loudly when the provider hands an address another host still holds" do
@@ -365,7 +358,7 @@ RSpec.describe VmHost do
     # them and the host answers by proxy, so VMs draw from them as from the
     # routed block Leaseweb sends to the main IP.
     it "opens the leaseweb switched segment to the vm pool alongside the routed block" do
-      allow(Config).to receive_messages(
+      expect(Config).to receive_messages(
         leaseweb_connection_string: "https://api.leaseweb.com",
         leaseweb_api_key: "key123",
       )
@@ -729,19 +722,11 @@ RSpec.describe VmHost do
   end
 
   describe "#io_cpu_count" do
-    it "uses 2 cpus for AX161" do
-      vm_host.total_cpus = 64
-      expect(vm_host.io_cpu_count).to eq(2)
-    end
-
-    it "uses 4 cpus for RX220" do
-      vm_host.total_cpus = 80
-      expect(vm_host.io_cpu_count).to eq(4)
-    end
-
-    it "uses 4 cpus for AX162" do
-      vm_host.total_cpus = 96
-      expect(vm_host.io_cpu_count).to eq(4)
+    it "uses 2 cpus for AX161, and 4 cpus for RX220 and AX162" do
+      expect([64, 80, 96].map { |total_cpus|
+        vm_host.total_cpus = total_cpus
+        vm_host.io_cpu_count
+      }).to eq [2, 4, 4]
     end
   end
 
@@ -755,21 +740,6 @@ RSpec.describe VmHost do
     it "disallows slices" do
       vm_host.accepts_slices = true
       expect { vm_host.disallow_slices }.to change(vm_host, :accepts_slices).to(false)
-    end
-  end
-
-  describe "#provider_name" do
-    it "returns the provider name" do
-      HostProvider.create do |hp|
-        hp.id = vm_host.id
-        hp.server_identifier = "test-server-123"
-        hp.provider_name = "hetzner"
-      end
-      expect(vm_host.provider_name).to eq("hetzner")
-    end
-
-    it "returns nil if there is no provider" do
-      expect(vm_host.provider_name).to be_nil
     end
   end
 
