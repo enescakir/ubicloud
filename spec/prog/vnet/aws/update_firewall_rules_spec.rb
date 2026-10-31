@@ -156,7 +156,7 @@ RSpec.describe Prog::Vnet::Aws::UpdateFirewallRules do
     end
 
     it "pages and naps without revoking when authorize hits the SG rule limit" do
-      allow(vm).to receive(:ubid).and_return("vmubid")
+      expect(vm).to receive(:ubid).and_return("vmubid")
       expect(vm).to receive(:firewall_rules).and_return([
         instance_double(FirewallRule, cidr: NetAddr::IPv4Net.parse("1.1.1.1/32"), port_range: Sequel.pg_range(22..23), protocol: "tcp"),
       ])
@@ -182,7 +182,7 @@ RSpec.describe Prog::Vnet::Aws::UpdateFirewallRules do
         instance_double(FirewallRule, cidr: NetAddr::IPv4Net.parse("10.0.0.3/32"), port_range: Sequel.pg_range(22..23), protocol: "tcp"),
         instance_double(FirewallRule, cidr: NetAddr::IPv4Net.parse("10.0.0.4/32"), port_range: Sequel.pg_range(22..23), protocol: "tcp"),
       ]
-      allow(vm).to receive(:firewall_rules).and_return(rules)
+      expect(vm).to receive(:firewall_rules).and_return(rules).thrice
 
       stale_a = {ip_protocol: "tcp", from_port: 0, to_port: 9, ip_ranges: [{cidr_ip: "192.168.1.0/24"}], ipv_6_ranges: []}
       stale_b = {ip_protocol: "tcp", from_port: 0, to_port: 9, ip_ranges: [{cidr_ip: "192.168.2.0/24"}], ipv_6_ranges: []}
