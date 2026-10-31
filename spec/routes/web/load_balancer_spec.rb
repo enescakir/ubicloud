@@ -519,7 +519,7 @@ RSpec.describe Clover, "load balancer" do
         expect(page.title).to eq "Ubicloud - dummy-lb-2"
         expect(page).to have_no_content("Rename")
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
 
         AccessControlEntry.create(project_id: project_wo_permissions.id, subject_id: user.id, action_id: ActionType::NAME_MAP["LoadBalancer:edit"])
         page.refresh
