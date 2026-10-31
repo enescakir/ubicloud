@@ -211,7 +211,8 @@ RSpec.describe Clover, "Kubernetes" do
       end
 
       it "can not select invisible location" do
-        expect { choose option: Location::GITHUB_RUNNERS_UBID }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_css "input[type=radio][name=location][value='#{Location::HETZNER_FSN1_UBID}']"
+        expect(page).to have_no_css "input[type=radio][name=location][value='#{Location::GITHUB_RUNNERS_UBID}']"
       end
 
       it "can not create kubernetes cluster in a project when does not have permissions" do
@@ -1043,7 +1044,7 @@ RSpec.describe Clover, "Kubernetes" do
         visit "#{project_wo_permissions.path}#{kc_no_perm.path}/settings"
         expect(page.title).to eq "Ubicloud - not-my-k8s"
 
-        expect { find ".delete-btn" }.to raise_error Capybara::ElementNotFound
+        expect(page).to have_no_css ".delete-btn"
       end
     end
   end
