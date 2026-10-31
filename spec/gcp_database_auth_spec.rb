@@ -101,12 +101,12 @@ RSpec.describe GcpDatabaseAuth do
     it "surfaces the SA and body, preserving the original backtrace, when generateAccessToken is rejected" do
       adc = Object.new
       svc = instance_double(Google::Apis::IamcredentialsV1::IAMCredentialsService)
-      allow(svc).to receive(:authorization=).with(adc)
-      allow(svc).to receive(:generate_service_account_access_token)
+      expect(svc).to receive(:authorization=).with(adc)
+      expect(svc).to receive(:generate_service_account_access_token)
         .with("projects/-/serviceAccounts/#{sa}", anything)
         .and_raise(Google::Apis::ClientError.new("Invalid request", body: '{"error":{"status":"INVALID_ARGUMENT"}}'))
-      allow(Google::Apis::IamcredentialsV1::IAMCredentialsService).to receive(:new).with(no_args).and_return(svc)
-      allow(Google::Auth).to receive(:get_application_default).with(["https://www.googleapis.com/auth/cloud-platform"]).and_return(adc)
+      expect(Google::Apis::IamcredentialsV1::IAMCredentialsService).to receive(:new).with(no_args).and_return(svc)
+      expect(Google::Auth).to receive(:get_application_default).with(["https://www.googleapis.com/auth/cloud-platform"]).and_return(adc)
 
       expect { call_proc(opts_proc) }
         .to raise_error(GcpDatabaseAuth::Error, /clover-sa@my-project\.iam\.gserviceaccount\.com.*Google::Apis::ClientError.*INVALID_ARGUMENT/m) do |error|
@@ -149,15 +149,15 @@ RSpec.describe GcpDatabaseAuth do
       mints = []
       adc = Object.new
       svc = instance_double(Google::Apis::IamcredentialsV1::IAMCredentialsService)
-      allow(svc).to receive(:authorization=).with(adc)
-      allow(svc).to receive(:generate_service_account_access_token) do
+      expect(svc).to receive(:authorization=).with(adc)
+      expect(svc).to receive(:generate_service_account_access_token) do
         mints << 1
         minting << 1
         proceed.pop(timeout: 2) # hold the lock until the second caller is waiting
         Struct.new(:access_token, :expire_time).new("tok-#{mints.size}", (Time.now + 3600).utc.iso8601)
       end
-      allow(Google::Apis::IamcredentialsV1::IAMCredentialsService).to receive(:new).with(no_args).and_return(svc)
-      allow(Google::Auth).to receive(:get_application_default).with(["https://www.googleapis.com/auth/cloud-platform"]).and_return(adc)
+      expect(Google::Apis::IamcredentialsV1::IAMCredentialsService).to receive(:new).with(no_args).and_return(svc)
+      expect(Google::Auth).to receive(:get_application_default).with(["https://www.googleapis.com/auth/cloud-platform"]).and_return(adc)
 
       first = Thread.new { call_proc(opts_proc)[:password] }
       expect(minting.pop(timeout: 2)).to eq(1)     # first holds the lock, inside the blocked mint
