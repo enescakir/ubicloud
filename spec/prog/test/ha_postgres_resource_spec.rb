@@ -56,8 +56,6 @@ RSpec.describe Prog::Test::HaPostgresResource do
       expect(Config).to receive(:e2e_aws_assume_role).and_return(nil)
       expect(Config).to receive(:e2e_aws_access_key).and_return("access_key")
       expect(Config).to receive(:e2e_aws_secret_key).and_return("secret_key")
-      allow(Aws::Credentials).to receive(:new).and_return(Aws::Credentials.new("access_key", "secret_key"))
-      allow(Aws::EC2::Client).to receive(:new).and_return(Aws::EC2::Client.new(stub_responses: true))
       aws_strand = described_class.assemble(provider: "aws")
       location = Location[provider: "aws", project_id: nil, name: "us-east-1"]
       LocationAz.create(location_id: location.id, az: "a", zone_id: "use1-az1")
@@ -67,8 +65,6 @@ RSpec.describe Prog::Test::HaPostgresResource do
     end
 
     it "skips creating aws credential if one already exists" do
-      allow(Aws::Credentials).to receive(:new).and_return(Aws::Credentials.new("existing-key", "existing-secret"))
-      allow(Aws::EC2::Client).to receive(:new).and_return(Aws::EC2::Client.new(stub_responses: true))
       aws_strand = described_class.assemble(provider: "aws")
       location = Location[provider: "aws", project_id: nil, name: "us-east-1"]
       LocationAz.create(location_id: location.id, az: "a", zone_id: "use1-az1")
@@ -173,14 +169,14 @@ RSpec.describe Prog::Test::HaPostgresResource do
     end
 
     it "fails if the postgres test fails" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run test queries")
     end
 
     it "hops to verify_wal_archiving if the postgres test passes" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres }.to hop("verify_wal_archiving")
     end
   end
@@ -213,9 +209,9 @@ RSpec.describe Prog::Test::HaPostgresResource do
     it "triggers a failover and hops to wait_failover" do
       primary = pgr_test.postgres_resource.servers.first
       sshable = Sshable.new
-      allow(primary.vm).to receive(:sshable).and_return(sshable)
-      allow(sshable).to receive(:_cmd).with("ps aux | grep -v grep | grep /usr/lib/postgresql/18/bin/postgres | awk '{print $2}' | xargs sudo kill -9").and_return("")
-      allow(sshable).to receive(:_cmd).with("echo -e '\nfoobar = baz' | sudo tee -a /etc/postgresql/18/main/conf.d/999-break.conf").and_return("")
+      expect(primary.vm).to receive(:sshable).and_return(sshable).twice
+      expect(sshable).to receive(:_cmd).with("ps aux | grep -v grep | grep /usr/lib/postgresql/18/bin/postgres | awk '{print $2}' | xargs sudo kill -9").and_return("")
+      expect(sshable).to receive(:_cmd).with("echo -e '\nfoobar = baz' | sudo tee -a /etc/postgresql/18/main/conf.d/999-break.conf").and_return("")
       expect { pgr_test.trigger_failover }.to hop("wait_failover")
     end
   end
@@ -271,19 +267,19 @@ RSpec.describe Prog::Test::HaPostgresResource do
     end
 
     it "fails if the postgres test fails" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres_after_failover }.to hop("destroy")
       expect(pgr_test.strand.stack[0]["fail_message"]).to eq("Failed to run read queries after failover")
     end
 
     it "hops to destroy if the standby does not exit read-only mode" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
       expect { pgr_test.test_postgres_after_failover }.to hop("destroy")
       expect(pgr_test.strand.stack[0]["fail_message"]).to eq("Failed to run write queries after failover")
     end
 
     it "hops to destroy if the postgres test succeeds" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres_after_failover }.to hop("destroy")
       expect(pgr_test.strand.stack[0]["fail_message"]).to be_nil
     end
