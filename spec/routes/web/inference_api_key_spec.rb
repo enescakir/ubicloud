@@ -34,7 +34,7 @@ RSpec.describe Clover, "inference-api-key" do
       AccessControlEntry.create(project_id: project.id, subject_id: user.id, action_id: ActionType::NAME_MAP["InferenceApiKey:view"])
 
       page.refresh
-      expect { find "#api-key-#{@api_key.ubid} .delete-btn" }.to raise_error Capybara::ElementNotFound
+      expect(page).to have_no_css "#api-key-#{@api_key.ubid} .delete-btn"
       expect(page).to have_no_content "Create API Key"
     end
 
