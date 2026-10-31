@@ -132,19 +132,17 @@ RSpec.describe Prog::Test::GithubRunner do
   end
 
   describe "#wait_vm_pool_to_be_ready" do
-    it "hops to trigger_test_run when the pool is ready" do
-      pool = instance_double(VmPool, size: 1)
-      expect(VmPool).to receive(:[]).and_return(pool)
-      expect(pool).to receive(:vms_dataset).and_return(instance_double(Sequel::Dataset, exclude: [instance_double(Vm)]))
-      expect(pool).to receive(:update).with(size: 0)
-      expect { gr_test.wait_vm_pool_to_be_ready }.to hop("trigger_test_run")
-    end
+    let(:pool) { VmPool.create(size: 1, vm_size: "standard-2", boot_image: "github-ubuntu-2204", location_id: Location::GITHUB_RUNNERS_ID, storage_size_gib: 86, arch: "x64") }
 
-    it "naps if the vm in the pool not provisioned yet" do
-      pool = instance_double(VmPool, size: 1)
-      expect(VmPool).to receive(:[]).and_return(pool)
-      expect(pool).to receive(:vms_dataset).and_return(instance_double(Sequel::Dataset, exclude: []))
+    before { refresh_frame(gr_test, new_values: {"vm_pool_id" => pool.id}) }
+
+    it "naps until the vm in the pool is provisioned, then empties the pool and hops to trigger_test_run" do
+      vm = create_vm(pool_id: pool.id, provisioned_at: nil)
       expect { gr_test.wait_vm_pool_to_be_ready }.to nap(10)
+
+      vm.update(provisioned_at: Time.now)
+      expect { gr_test.wait_vm_pool_to_be_ready }.to hop("trigger_test_run")
+      expect(pool.reload.size).to eq(0)
     end
   end
 
