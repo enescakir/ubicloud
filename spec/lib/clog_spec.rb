@@ -8,13 +8,13 @@ RSpec.describe Clog do
   end
 
   it "writes to $stdout in non-test mode" do
-    allow(Config).to receive(:test?).and_return(false)
+    expect(Config).to receive(:test?).and_return(false)
     expect($stdout).to receive(:write).with('{"message":"hello","time":"' + now.to_s + '"}' + "\n")
     described_class.emit "hello"
   end
 
   it "scrubs non-UTF-8 string values anywhere in the payload instead of raising" do
-    allow(Config).to receive(:test?).and_return(false)
+    expect(Config).to receive(:test?).and_return(false)
     captured = nil
     expect($stdout).to receive(:write) { |line| captured = line }
     described_class.emit("boom", {stderr: "bad\xff", list: ["ok", "\xfe".b]})
