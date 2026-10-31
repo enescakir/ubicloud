@@ -159,13 +159,13 @@ RSpec.describe MetricsTargetResource do
     it "swallows exceptions and logs them" do
       expect(postgres_server).to receive(:export_metrics).and_raise(StandardError.new("Export failed"))
       expect(Clog).to receive(:emit).and_call_original
-      expect { resource.export_metrics }.not_to raise_error
+      resource.export_metrics
     end
 
     it "skips export if resource is deleted" do
       resource.instance_variable_set(:@deleted, true)
       expect(postgres_server).not_to receive(:export_metrics)
-      expect { resource.export_metrics }.not_to raise_error
+      resource.export_metrics
     end
 
     [IOError.new("closed stream"), Errno::ECONNRESET.new("recvfrom(2)")].each do |ex|
@@ -258,7 +258,7 @@ RSpec.describe MetricsTargetResource do
   describe "#close_resource_session" do
     it "returns if session is nil" do
       resource.instance_variable_set(:@session, nil)
-      expect { resource.close_resource_session }.not_to raise_error
+      expect(resource.close_resource_session).to be_nil
     end
 
     it "closes the session and sets it to nil" do
@@ -274,7 +274,7 @@ RSpec.describe MetricsTargetResource do
       resource.instance_variable_set(:@session, {ssh_session: session})
       expect(session).to receive(:shutdown!)
       expect(session).to receive(:close).and_raise(RuntimeError)
-      expect { resource.close_resource_session }.not_to raise_error
+      resource.close_resource_session
     end
   end
 end
