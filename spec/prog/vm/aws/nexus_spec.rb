@@ -594,12 +594,12 @@ RSpec.describe Prog::Vm::Aws::Nexus do
 
       it "recreates runner when alternative_families is nil" do
         set_alternative_families(nil)
-        expect { nx.create_instance }.to nap(60).and change(GithubRunner, :count).by(1)
+        expect { nx.create_instance }.to nap(60).and change(GithubRunner, :count).from(1).to(2)
       end
 
       it "recreates runner when alternative_families is empty" do
         set_alternative_families([])
-        expect { nx.create_instance }.to nap(60).and change(GithubRunner, :count).by(1)
+        expect { nx.create_instance }.to nap(60).and change(GithubRunner, :count).from(1).to(2)
       end
 
       it "creates runner with the first alternative when current_family is the initial family" do
@@ -620,7 +620,7 @@ RSpec.describe Prog::Vm::Aws::Nexus do
       it "recreates runner when current_family is the last family" do
         vm.update(family: "m6a")
         set_alternative_families(["m7i", "m6a"])
-        expect { nx.create_instance }.to nap(60).and change(GithubRunner, :count).by(1)
+        expect { nx.create_instance }.to nap(60).and change(GithubRunner, :count).from(1).to(2)
       end
     end
 
@@ -846,51 +846,54 @@ RSpec.describe Prog::Vm::Aws::Nexus do
       expect(nx.try_postgres_family_fallback).to be false
     end
 
+    def create_postgres_server_on_vm(fallback_eligible: true)
+      project.set_ff_postgres_instance_type_fallback(true) if fallback_eligible
+      server = PostgresServer.create(
+        timeline: create_postgres_timeline(location_id: location.id), resource: create_postgres_resource(project:, location_id: location.id),
+        vm_id: vm.id, is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "17",
+      )
+      Strand.create_with_id(server, prog: "Postgres::PostgresServerNexus", label: "wait")
+      server
+    end
+
+    def ignore_instance_size_mismatch_count(server)
+      server.semaphores_dataset.where(name: "ignore_instance_size_mismatch").count
+    end
+
     it "returns false when the postgres_server is not fallback eligible" do
-      ps = instance_double(PostgresServer, fallback_eligible?: false)
-      allow(PostgresServer).to receive(:[]).with(vm_id: vm.id).and_return(ps)
+      create_postgres_server_on_vm(fallback_eligible: false)
       expect(nx.try_postgres_family_fallback).to be false
     end
 
     it "returns false when no fallback candidate has a matching postgres size option" do
+      create_postgres_server_on_vm
       vm.update(family: "standard")
-      ps = instance_double(PostgresServer, fallback_eligible?: true)
-      allow(PostgresServer).to receive(:[]).with(vm_id: vm.id).and_return(ps)
       expect(nx.try_postgres_family_fallback).to be false
     end
 
     it "skips chain entries whose project feature flag is disabled and lands on the next enabled one" do
       # vm starts on m6gd; chain is [m6gd, m7gd, m8gd]. m7gd needs ff_enable_m7gd
       # (off by default), so the fallback skips it and lands on m8gd (unconditional).
-      ps = instance_double(PostgresServer, fallback_eligible?: true, resource: instance_double(PostgresResource, project:, flavor: "standard", location:), ignore_instance_size_mismatch_set?: false)
-      allow(PostgresServer).to receive(:[]).with(vm_id: vm.id).and_return(ps)
-      expect(ps).to receive(:incr_ignore_instance_size_mismatch)
+      server = create_postgres_server_on_vm
       expect { nx.try_postgres_family_fallback }.to change { vm.reload.family }.from("m6gd").to("m8gd")
+      expect(ignore_instance_size_mismatch_count(server)).to eq(1)
     end
 
-    it "picks an earlier chain entry when its feature flag is enabled" do
+    it "picks an earlier chain entry when its feature flag is enabled, without another ignore_instance_size_mismatch when already set" do
       project.set_ff_enable_m7gd(true)
-      ps = instance_double(PostgresServer, fallback_eligible?: true, resource: instance_double(PostgresResource, project:, flavor: "standard", location:), ignore_instance_size_mismatch_set?: false)
-      allow(PostgresServer).to receive(:[]).with(vm_id: vm.id).and_return(ps)
-      expect(ps).to receive(:incr_ignore_instance_size_mismatch)
+      server = create_postgres_server_on_vm
+      server.incr_ignore_instance_size_mismatch
       expect { nx.try_postgres_family_fallback }.to change { vm.reload.family }.from("m6gd").to("m7gd")
-    end
-
-    it "does not incr ignore_instance_size_mismatch when already set" do
-      ps = instance_double(PostgresServer, fallback_eligible?: true, resource: instance_double(PostgresResource, project:, flavor: "standard", location:), ignore_instance_size_mismatch_set?: true)
-      allow(PostgresServer).to receive(:[]).with(vm_id: vm.id).and_return(ps)
-      expect(ps).not_to receive(:incr_ignore_instance_size_mismatch)
-      nx.try_postgres_family_fallback
+      expect(ignore_instance_size_mismatch_count(server)).to eq(1)
     end
 
     it "returns false when no chain candidate is allowed by the option tree" do
       # r-family chain members all require per-family feature flags; with none
       # enabled the option tree excludes them, so no candidate is allowed.
       vm.update(family: "r6gd")
-      ps = instance_double(PostgresServer, fallback_eligible?: true, resource: instance_double(PostgresResource, project:, flavor: "standard", location:), ignore_instance_size_mismatch_set?: false)
-      allow(PostgresServer).to receive(:[]).with(vm_id: vm.id).and_return(ps)
-      expect(ps).not_to receive(:incr_ignore_instance_size_mismatch)
+      server = create_postgres_server_on_vm
       expect(nx.try_postgres_family_fallback).to be false
+      expect(ignore_instance_size_mismatch_count(server)).to eq(0)
     end
   end
 
@@ -909,19 +912,15 @@ RSpec.describe Prog::Vm::Aws::Nexus do
         .and change { vm.sshable.reload.host }.to("1.2.3.4")
     end
 
-    it "updates the vm" do
+    it "updates the vm and the sshable host" do
       now = Time.now.floor
       expect(Time).to receive(:now).at_least(:once).and_return(now)
       expect { nx.wait_instance_created }.to hop("wait_sshable")
+        .and change { vm.sshable.reload.host }.to("1.2.3.4")
       vm.reload
       expect(vm.cores).to eq(1)
       expect(vm.ephemeral_net6.to_s).to eq("2a01:4f8:173:1ed3:aa7c::/79")
       expect(vm.allocated_at).to eq(now)
-    end
-
-    it "updates the sshable host" do
-      expect { nx.wait_instance_created }.to hop("wait_sshable")
-        .and change { vm.sshable.reload.host }.to("1.2.3.4")
     end
 
     it "schedules the allocation waiting strand when the vm is allocated" do
@@ -1361,7 +1360,7 @@ RSpec.describe Prog::Vm::Aws::Nexus do
 
   describe "#cleanup_roles" do
     it "cleans up roles" do
-      allow(Config).to receive(:aws_postgres_iam_access).and_return(true)
+      expect(Config).to receive(:aws_postgres_iam_access).and_return(true).at_least(:once)
       iam_client.stub_responses(:list_policies, policies: [{policy_name: "#{vm.name}-cw-agent-policy", arn: "arn:aws:iam::aws:policy/#{vm.name}-cw-agent-policy"}])
       iam_client.stub_responses(:remove_role_from_instance_profile, {})
       iam_client.stub_responses(:delete_instance_profile, {})
