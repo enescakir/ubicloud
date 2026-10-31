@@ -202,7 +202,7 @@ RSpec.describe Kubernetes::Client do
     it "runs kubectl command in the right format" do
       response = Net::SSH::Connection::Session::StringWithExitstatus.new("", 0)
       expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf --request-timeout=30s get nodes").and_return(response)
-      expect { kubernetes_client.kubectl("get nodes") }.not_to raise_error
+      expect(kubernetes_client.kubectl("get nodes")).to eq("")
     end
 
     it "raises an error if passed a non-frozen string" do
@@ -307,7 +307,7 @@ RSpec.describe Kubernetes::Client do
     end
 
     it "determines lb_service is modified because port_diff is not empty" do
-      allow(kubernetes_cluster).to receive(:vm_diff_for_lb).and_return([[], []])
+      expect(kubernetes_cluster).to receive(:vm_diff_for_lb).and_return([[], []]).twice
 
       expect(kubernetes_cluster).to receive(:port_diff_for_lb).and_return([[], [instance_double(LoadBalancerPort)]])
       expect(kubernetes_client.any_lb_services_modified?).to be(true)
@@ -346,8 +346,8 @@ RSpec.describe Kubernetes::Client do
       missing_port = [80, 8000]
       missing_vm = create_vm
       extra_vm = create_vm
-      allow(kubernetes_client).to receive(:lb_desired_ports).and_return([[30122, 80]])
-      allow(kubernetes_cluster).to receive_messages(
+      expect(kubernetes_client).to receive(:lb_desired_ports).and_return([[30122, 80]])
+      expect(kubernetes_cluster).to receive_messages(
         vm_diff_for_lb: [[extra_vm], [missing_vm]],
         port_diff_for_lb: [[kubernetes_cluster.services_lb.ports.first], [missing_port]],
       )
@@ -359,8 +359,8 @@ RSpec.describe Kubernetes::Client do
       missing_port = [80, 8000]
       missing_vm = create_vm
       extra_vm = create_vm
-      allow(kubernetes_client).to receive(:lb_desired_ports).and_return([[30122, 80]])
-      allow(kubernetes_cluster).to receive_messages(
+      expect(kubernetes_client).to receive(:lb_desired_ports).and_return([[30122, 80]])
+      expect(kubernetes_cluster).to receive_messages(
         vm_diff_for_lb: [[extra_vm], [missing_vm]],
         port_diff_for_lb: [[kubernetes_cluster.services_lb.ports.first], [missing_port]],
       )
@@ -369,10 +369,7 @@ RSpec.describe Kubernetes::Client do
     end
 
     it "raises error with non existing lb" do
-      session = Net::SSH::Connection::Session.allocate
-      kubernetes_client = described_class.new(instance_double(KubernetesCluster, services_lb: nil), session)
-      response = Net::SSH::Connection::Session::StringWithExitstatus.new({"items" => [{}]}.to_json, 0)
-      expect(session).to receive(:_exec!).with("sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf --request-timeout=30s get service --all-namespaces --field-selector spec.type=LoadBalancer -ojson").and_return(response)
+      kubernetes_cluster.update(services_lb: nil)
       expect { kubernetes_client.sync_kubernetes_services }.to raise_error("services load balancer does not exist.")
     end
   end
