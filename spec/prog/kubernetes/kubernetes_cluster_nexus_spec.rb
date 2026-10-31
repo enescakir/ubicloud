@@ -207,7 +207,7 @@ RSpec.describe Prog::Kubernetes::KubernetesClusterNexus do
     end
 
     it "creates api server and services load balancers with the right dns zone on prod for hostname_version 1 and hops" do
-      allow(Config).to receive(:kubernetes_service_hostname).and_return("k8s.ubicloud.com")
+      expect(Config).to receive(:kubernetes_service_hostname).and_return("k8s.ubicloud.com")
       dns_zone = DnsZone[name: "k8s.ubicloud.com"]
       refresh_frame(nx, new_values: {"hostname_version" => 1})
 
@@ -757,7 +757,7 @@ RSpec.describe Prog::Kubernetes::KubernetesClusterNexus do
 
     it "appends operator keys to the mesh when configured" do
       operator_key = "ssh-ed25519 AAAAoperator operator@ubicloud"
-      allow(Config).to receive(:operator_ssh_public_keys).and_return(operator_key)
+      expect(Config).to receive(:operator_ssh_public_keys).and_return(operator_key).twice
       first_sshable = worker_mesh_nodes.first.vm.sshable
       second_sshable = worker_mesh_nodes.last.vm.sshable
 
