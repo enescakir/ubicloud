@@ -137,15 +137,15 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
     it "provisions a new server without excluding hosts when Config.allow_unspread_servers is true" do
       server = create_server(is_representative: true, vm_host_data_center: "dc1")
       server.incr_recycle
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
-      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).by(1)
+      expect(Config).to receive(:allow_unspread_servers).and_return(true)
+      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).from(1).to(2)
     end
 
     it "provisions a new server but excludes currently used data centers" do
       server = create_server(is_representative: true, vm_host_data_center: "dc1")
       server.incr_recycle
-      allow(Config).to receive(:allow_unspread_servers).and_return(false)
-      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).by(1)
+      expect(Config).to receive(:allow_unspread_servers).and_return(false)
+      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).from(1).to(2)
     end
 
     it "does not exclude AZs of recycling servers for aws" do
@@ -159,7 +159,7 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
       server2.incr_recycle
       pg.incr_use_different_az
       expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_availability_zones: [])).and_call_original
-      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).by(1)
+      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).from(2).to(3)
     end
 
     it "provisions a new server in a used az for aws if use_different_az_set? is false" do
@@ -169,13 +169,13 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
       server = create_server(is_representative: true, subnet_az: "a")
       server.incr_recycle
       expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(availability_zone: "a")).and_call_original
-      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).by(1)
+      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).from(1).to(2)
     end
 
     it "provisions a new server with the correct timeline for a regular instance" do
       server = create_server(is_representative: true, vm_host_data_center: "dc1")
       server.incr_recycle
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
+      expect(Config).to receive(:allow_unspread_servers).and_return(true)
       expect { nx.provision_servers }.to nap
       expect(PostgresServer.order(:created_at).last.timeline_id).to eq(timeline.id)
     end
@@ -187,7 +187,7 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
       pg.update(parent_id: parent.id)
       server = create_server(is_representative: true, vm_host_data_center: "dc1")
       server.incr_recycle
-      allow(Config).to receive(:allow_unspread_servers).and_return(true)
+      expect(Config).to receive(:allow_unspread_servers).and_return(true)
       expect { nx.provision_servers }.to nap
       expect(PostgresServer.order(:created_at, is_representative: false).last.timeline_id).to eq(parent_timeline.id)
     end
@@ -199,7 +199,7 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
       server = create_server(is_representative: true, subnet_az: "a")
       server.incr_recycle
       server.vm.update(vm_host_id: nil)
-      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).by(1)
+      expect { nx.provision_servers }.to nap.and change(PostgresServer, :count).from(1).to(2)
     end
 
     it "provisions a new server on GCP even if a server is not assigned to a vm_host" do
@@ -634,20 +634,9 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
       expect(candidate.vm.sshable).to receive(:_cmd).with("sudo journalctl -u upgrade_postgres").and_return("log line 1\nlog line 2")
       expect(Clog).to receive(:emit).with("Postgres resource upgrade failed", instance_of(Hash)).and_call_original.twice
 
-      expect { nx.upgrade_failed }.to nap(6 * 60 * 60).and change(Page, :count).by(1)
+      expect { nx.upgrade_failed }.to nap(6 * 60 * 60).and change(Page, :count).from(0).to(1)
       expect(Page.from_tag_parts("PostgresUpgradeFailed", pg.id).resource_id).to eq(pg.id)
       expect(candidate.destroy_set?(cached: false)).to be false
-      expect(primary.unfence_set?(cached: false)).to be true
-    end
-
-    it "unfences primary if it is fenced" do
-      candidate = create_server(version: "16", upgrade_candidate: true)
-      nx.instance_variable_set(:@upgrade_candidate, candidate)
-      allow(candidate.vm.sshable).to receive(:_cmd).and_return("")
-      allow(Clog).to receive(:emit)
-
-      expect { nx.upgrade_failed }.to nap(6 * 60 * 60)
-
       expect(primary.unfence_set?(cached: false)).to be true
     end
 
@@ -655,8 +644,8 @@ RSpec.describe Prog::Postgres::ConvergePostgresResource do
       candidate = create_server(version: "16", upgrade_candidate: true)
       nx.instance_variable_set(:@upgrade_candidate, candidate)
       primary.strand.update(label: "wait")
-      allow(candidate.vm.sshable).to receive(:_cmd).and_return("")
-      allow(Clog).to receive(:emit)
+      expect(candidate.vm.sshable).not_to receive(:_cmd)
+      expect(Clog).not_to receive(:emit)
 
       expect { nx.upgrade_failed }.to nap(6 * 60 * 60)
 
