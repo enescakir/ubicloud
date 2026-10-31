@@ -204,22 +204,13 @@ PGDATA=/dat/17/data
       expect(postgres_timeline.need_backup?).to be(true)
     end
 
-    it "returns true if the previous backup is older than backup_period_hours" do
+    it "returns true only if the previous backup is older than backup_period_hours" do
+      postgres_timeline.update(latest_backup_started_at: Time.now - 60 * 60 * 25)
       expect(postgres_timeline).to receive(:blob_storage).and_return("dummy-blob-storage").twice
-      expect(postgres_timeline).to receive(:latest_backup_started_at).and_return(Time.now - 60 * 60 * 25).exactly(4).times
       expect(sshable).to receive(:_cmd).and_return("NotStarted")
       expect(postgres_timeline.need_backup?).to be(true)
       postgres_timeline.update(backup_period_hours: 30)
       expect(postgres_timeline.need_backup?).to be(false)
-    end
-
-    it "returns false if the previous backup is within backup_period_hours" do
-      expect(postgres_timeline).to receive(:blob_storage).and_return("dummy-blob-storage").twice
-      expect(postgres_timeline).to receive(:latest_backup_started_at).and_return(Time.now - 60 * 60 * 23).exactly(4).times
-      expect(sshable).to receive(:_cmd).and_return("NotStarted")
-      expect(postgres_timeline.need_backup?).to be(false)
-      postgres_timeline.update(backup_period_hours: 12)
-      expect(postgres_timeline.need_backup?).to be(true)
     end
 
     it "returns false if a backup is currently in progress" do
