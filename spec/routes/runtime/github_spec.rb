@@ -40,10 +40,10 @@ RSpec.describe Clover, "github" do
     repository = GithubRepository.create(name: "test", access_key: nil, installation:)
     GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "test", label: "ubicloud", repository_id: repository.id)
     blob_storage_client = instance_double(Aws::S3::Client)
-    allow(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
+    expect(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
     expect(blob_storage_client).to receive(:create_bucket)
     cloudflare_client = instance_double(CloudflareClient)
-    allow(CloudflareClient).to receive(:new).and_return(cloudflare_client)
+    expect(CloudflareClient).to receive(:new).and_return(cloudflare_client)
     expect(cloudflare_client).to receive(:create_token).and_return(["test-key", "test-secret"])
 
     post "/runtime/github/caches"
@@ -59,10 +59,10 @@ RSpec.describe Clover, "github" do
     repository = GithubRepository.create(name: "test2", access_key: nil, installation:)
     GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "test2", label: "ubicloud", repository_id: repository.id)
     blob_storage_client = instance_double(Aws::S3::Client)
-    allow(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
+    expect(Aws::S3::Client).to receive(:new).and_return(blob_storage_client)
     expect(blob_storage_client).to receive(:create_bucket)
     cloudflare_client = instance_double(CloudflareClient)
-    allow(CloudflareClient).to receive(:new).and_return(cloudflare_client)
+    expect(CloudflareClient).to receive(:new).and_return(cloudflare_client)
     expect(cloudflare_client).to receive(:create_token).and_raise(Excon::Error::HTTPStatus.new("Expected(200) <=> Actual(520 Unknown)", nil, Excon::Response.new(body: "foo")))
 
     post "/runtime/github/caches"
@@ -146,7 +146,7 @@ RSpec.describe Clover, "github" do
       it "gets branch from GitHub API if the runner doesn't have a branch info" do
         runner.update(workflow_job: nil, installation_id: installation.id)
         client = instance_double(Octokit::Client)
-        allow(Github).to receive(:installation_client).and_return(client)
+        expect(Github).to receive(:installation_client).and_return(client)
         expect(client).to receive(:workflow_run_jobs).and_return({jobs: [{head_branch: "dev", runner_name: runner.ubid}]})
         expect(blob_storage_client).to receive(:create_multipart_upload).and_return(instance_double(Aws::S3::Types::CreateMultipartUploadOutput, upload_id: "upload-id"))
         expect(url_presigner).to receive(:presigned_url).with(:upload_part, hash_including(bucket: repository.bucket_name, upload_id: "upload-id"))
@@ -314,7 +314,7 @@ RSpec.describe Clover, "github" do
         runner.update(workflow_job: nil, installation_id: installation.id)
         GithubCacheEntry.create(key: "k1", version: "v1", scope: "dev", repository_id: repository.id, created_by: runner.id, committed_at: Time.now)
         client = instance_double(Octokit::Client)
-        allow(Github).to receive(:installation_client).and_return(client)
+        expect(Github).to receive(:installation_client).and_return(client)
         expect(client).to receive(:workflow_run_jobs).and_return({jobs: [{head_branch: "dev", runner_name: "dummy-runner-name"}]})
         get "/runtime/github/cache", {keys: "k1", version: "v1", runId: 123}
 
@@ -325,7 +325,7 @@ RSpec.describe Clover, "github" do
         runner.update(workflow_job: nil, installation_id: installation.id)
         GithubCacheEntry.create(key: "k1", version: "v1", scope: "dev", repository_id: repository.id, created_by: runner.id, committed_at: Time.now)
         client = instance_double(Octokit::Client)
-        allow(Github).to receive(:installation_client).and_return(client)
+        expect(Github).to receive(:installation_client).and_return(client)
         expect(client).to receive(:workflow_run_jobs).and_raise(Octokit::NotFound)
         get "/runtime/github/cache", {keys: "k1", version: "v1", runId: 123}
 
@@ -336,7 +336,7 @@ RSpec.describe Clover, "github" do
         runner.update(workflow_job: nil, installation_id: installation.id)
         entry = GithubCacheEntry.create(key: "k1", version: "v1", scope: "dev", repository_id: repository.id, created_by: runner.id, committed_at: Time.now)
         client = instance_double(Octokit::Client)
-        allow(Github).to receive(:installation_client).and_return(client)
+        expect(Github).to receive(:installation_client).and_return(client)
         expect(client).to receive(:workflow_run_jobs).and_return({jobs: [{head_branch: "dev", runner_name: runner.ubid}]})
         expect(url_presigner).to receive(:presigned_url).with(:get_object, hash_including(bucket: repository.bucket_name, key: entry.blob_key)).and_return("http://presigned-url")
         get "/runtime/github/cache", {keys: "k1", version: "v1", runId: 123}
