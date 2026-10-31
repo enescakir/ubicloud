@@ -147,7 +147,7 @@ ECHO
 
     it "serves the endpoint cert as default and the peer cert via SNI, with an empty ca_bundle, for publicly signed clusters" do
       create_dns_zone
-      allow(Config).to receive_messages(acme_email: "test@ubicloud.com")
+      expect(Config).to receive_messages(acme_email: "test@ubicloud.com")
       minio_server.cluster.update(root_cert_1: nil, root_cert_key_1: nil, root_cert_2: nil, root_cert_key_2: nil, server_cert: "public-cert", server_cert_key: "public-key")
 
       captured = nil
