@@ -33,20 +33,9 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
   end
 
   describe ".assemble" do
-    it "creates github runner and vm with sshable" do
-      runner = described_class.assemble(installation, repository_name: "test-repo", label: "ubicloud").subject
-
-      expect(runner).not_to be_nil
-      expect(runner.repository_name).to eq("test-repo")
-      expect(runner.label).to eq("ubicloud")
-    end
-
-    it "creates github runner with custom size" do
-      runner = described_class.assemble(installation, repository_name: "test-repo", label: "ubicloud-standard-8").subject
-
-      expect(runner).not_to be_nil
-      expect(runner.repository_name).to eq("test-repo")
-      expect(runner.label).to eq("ubicloud-standard-8")
+    it "creates github runners for the default and custom sizes" do
+      runners = ["ubicloud", "ubicloud-standard-8"].map { described_class.assemble(installation, repository_name: "test-repo", label: it).subject }
+      expect(runners.map { [it.repository_name, it.label] }).to eq [["test-repo", "ubicloud"], ["test-repo", "ubicloud-standard-8"]]
     end
 
     it "schedules the runner strand at the given time" do
@@ -63,26 +52,19 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
   end
 
   describe ".pick_vm" do
-    it "provisions a VM if the pool is not existing" do
+    it "provisions a new vm without ch_version if the pool has no vm and ch_version 53.0 is not randomly selected" do
+      VmPool.create(size: 2, vm_size: "standard-4", boot_image: "github-ubuntu-2204", location_id: Location::GITHUB_RUNNERS_ID, storage_size_gib: 150, arch: "x64")
+      expect(Config).to receive(:github_actions_ch_53_percent).and_return(0)
       vm = nx.pick_vm
-      expect(vm.pool_id).to be_nil
+      expect(vm).to have_attributes(pool_id: nil, unix_user: "runneradmin", family: "standard", vcpus: 4, project_id: Config.github_runner_service_project_id)
       expect(vm.sshable.unix_user).to eq("runneradmin")
-      expect(vm.unix_user).to eq("runneradmin")
-      expect(vm.family).to eq("standard")
-      expect(vm.vcpus).to eq(4)
-      expect(vm.project_id).to eq(Config.github_runner_service_project_id)
+      expect(vm.strand.stack[0]["ch_version"]).to be_nil
     end
 
     it "uses ch_version 53.0 if randomly selected" do
       expect(Config).to receive(:github_actions_ch_53_percent).and_return(100)
       vm = nx.pick_vm
       expect(vm.strand.stack[0]["ch_version"]).to eq "53.0"
-    end
-
-    it "does not specify ch_version if not randomly selected" do
-      expect(Config).to receive(:github_actions_ch_53_percent).and_return(0)
-      vm = nx.pick_vm
-      expect(vm.strand.stack[0]["ch_version"]).to be_nil
     end
 
     it "does not specify ch_version for alien vms even if randomly selected" do
@@ -97,15 +79,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect(picked_vm.strand.stack[0]["ch_version"]).to be_nil
     end
 
-    it "provisions a new vm if pool is valid but there is no vm" do
-      VmPool.create(size: 2, vm_size: "standard-4", boot_image: "github-ubuntu-2204", location_id: Location::GITHUB_RUNNERS_ID, storage_size_gib: 150, arch: "x64")
-      vm = nx.pick_vm
-      expect(vm.pool_id).to be_nil
-      expect(vm.sshable.unix_user).to eq("runneradmin")
-      expect(vm.family).to eq("standard")
-      expect(vm.vcpus).to eq(4)
-    end
-
     it "uses the existing vm if pool can pick one" do
       installation.update(allocator_preferences: {})
       pool = VmPool.create(size: 2, vm_size: "standard-4", boot_image: "github-ubuntu-2404", location_id: Location::GITHUB_RUNNERS_ID, storage_size_gib: 150, arch: "x64")
@@ -117,7 +90,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "uses the premium vm pool if the installation prefers premium runners" do
       pool = VmPool.create(size: 2, vm_size: "premium-4", boot_image: "github-ubuntu-2404", location_id: Location::GITHUB_RUNNERS_ID, storage_size_gib: 150, arch: "x64")
       vm = create_vm(pool_id: pool.id, display_state: "running", family: "premium")
-      expect(installation).to receive(:premium_runner_enabled?).and_return(true)
+      installation.update(allocator_preferences: {"family_filter" => ["premium"]})
       picked_vm = nx.pick_vm
       expect(vm.id).to eq(picked_vm.id)
       expect(picked_vm.family).to eq("premium")
@@ -126,8 +99,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "uses the premium vm pool if a free premium upgrade is enabled" do
       pool = VmPool.create(size: 2, vm_size: "premium-4", boot_image: "github-ubuntu-2404", location_id: Location::GITHUB_RUNNERS_ID, storage_size_gib: 150, arch: "x64")
       vm = create_vm(pool_id: pool.id, display_state: "running", family: "premium")
-      expect(installation).to receive(:premium_runner_enabled?).and_return(false)
-      expect(installation).to receive(:free_runner_upgrade?).and_return(true)
+      project.set_ff_free_runner_upgrade_until((now + 60 * 60).to_s)
       picked_vm = nx.pick_vm
       expect(vm.id).to eq(picked_vm.id)
       expect(picked_vm.family).to eq("premium")
@@ -345,31 +317,16 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
   end
 
   describe ".update_billing_record" do
-    it "not updates billing record if the runner is destroyed before it's ready" do
+    it "does not update billing record if the runner is destroyed before it's ready or does not pick a job" do
       runner.update(ready_at: nil)
       expect(nx.update_billing_record).to be_nil
-      expect(BillingRecord.count).to eq(0)
-    end
-
-    it "not updates billing record if the runner does not pick a job" do
       runner.update(ready_at: now, workflow_job: nil)
       expect(nx.update_billing_record).to be_nil
-      expect(BillingRecord.count).to eq(0)
-    end
-
-    it "creates new billing record when no daily record" do
-      runner.update(ready_at: now - 5 * 60)
-      expect(BillingRecord).to receive(:create).and_call_original
-      nx.update_billing_record
-
-      br = BillingRecord[resource_id: installation.id]
-      expect(br.amount).to eq(5)
-      expect(br.duration(now, now)).to eq(1)
+      expect(BillingRecord.all).to eq []
     end
 
     it "uses separate billing rate for arm64 runners" do
       runner.update(label: "ubicloud-arm", ready_at: now - 5 * 60)
-      expect(BillingRecord).to receive(:create).and_call_original
       nx.update_billing_record
 
       br = BillingRecord[resource_id: installation.id]
@@ -383,7 +340,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       vm.update(family: "premium")
       runner.update(label: "ubicloud-standard-2", ready_at: now - 5 * 60)
 
-      expect(BillingRecord).to receive(:create).and_call_original
       nx.update_billing_record
 
       br = BillingRecord[resource_id: installation.id]
@@ -397,7 +353,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       vm.update(family: "premium")
       runner.update(label: "ubicloud-standard-2", ready_at: now - 5 * 60, created_at: now - 100)
       project.set_ff_free_runner_upgrade_until(now - 50).reload
-      expect(BillingRecord).to receive(:create).and_call_original
       nx.update_billing_record
 
       br = BillingRecord[resource_id: installation.id]
@@ -412,7 +367,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       location = Location.create(name: "eu-central-1", provider: "aws", project_id: vm.project_id, display_name: "aws-eu-central-1", ui_name: "AWS Frankfurt", visible: true)
       vm.update(location_id: location.id, family: "m7a")
       expect(vm.location.aws?).to be(true)
-      expect(BillingRecord).to receive(:create).and_call_original
       nx.update_billing_record
 
       br = BillingRecord[resource_id: installation.id]
@@ -427,7 +381,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       location = Location.create(name: "eu-central-1", provider: "aws", project_id: vm.project_id, display_name: "aws-eu-central-1", ui_name: "AWS Frankfurt", visible: true)
       vm.update(location_id: location.id, family: "m7a", vcpus: 32)
       expect(vm.location.aws?).to be(true)
-      expect(BillingRecord).to receive(:create).and_call_original
       nx.update_billing_record
 
       br = BillingRecord[resource_id: installation.id]
@@ -437,12 +390,10 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect(runner.billed_vm_size).to eq("standard-30")
     end
 
-    it "updates the amount of existing billing record" do
+    it "creates a daily billing record, then updates its amount" do
       runner.update(ready_at: now - 5 * 60)
-
-      expect(BillingRecord).to receive(:create).and_call_original
-      # Create a record
       nx.update_billing_record
+      expect(BillingRecord[resource_id: installation.id].duration(now, now)).to eq(1)
 
       expect { nx.update_billing_record }
         .to change { BillingRecord[resource_id: installation.id].amount }.from(5).to(10)
@@ -824,7 +775,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     end
 
     it "hops to allocate_vm without counting vms if the limit is disabled" do
-      allow(Config).to receive(:github_runner_allocation_slots).and_return(0)
+      expect(Config).to receive(:github_runner_allocation_slots).and_return(0)
       expect(Vm).not_to receive(:where)
       expect { nx.wait_allocation_slot }.to hop("allocate_vm")
     end
@@ -952,7 +903,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       it "does not spill over if the customer's alien quota is exceeded" do
         project.update(reputation: "limited")
         location = Location.create(name: "eu-central-1", provider: "aws", project_id: vm.project_id, display_name: "aws-eu-central-1", ui_name: "AWS Frankfurt", visible: true)
-        allow(Config).to receive(:github_runner_aws_location_id).and_return(location.id)
+        expect(Config).to receive(:github_runner_aws_location_id).and_return(location.id).at_least(:once)
         aws_vm = create_vm(location_id: location.id)
         aws_runner = GithubRunner.create(installation_id: installation.id, vm_id: aws_vm.id, location_id: location.id, repository_name: "test-repo", label: "ubicloud-standard-2")
         Strand.create_with_id(aws_runner, prog: "Github::GithubRunnerNexus", label: "wait")
@@ -991,7 +942,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "generates the jit config and naps if the vm is allocated but not provisioned yet" do
       vm.update(allocated_at: now)
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 123456}, encoded_jit_config: "AABBCC$"})
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 123456}, encoded_jit_config: "AABBCC$"})
       expect { nx.wait_vm }.to nap(10)
       expect(runner.runner_id).to eq(123456)
       expect(runner.encoded_jit_config).to eq("AABBCC$")
@@ -1006,7 +957,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "generates the jit config and hops if it was not generated before the vm became ready" do
       vm.update(allocated_at: now, provisioned_at: now)
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 123456}, encoded_jit_config: "AABBCC$"})
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 123456}, encoded_jit_config: "AABBCC$"})
       expect { nx.wait_vm }.to hop("setup_environment")
       expect(runner.encoded_jit_config).to eq("AABBCC$")
     end
@@ -1056,7 +1007,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "deregisters the runner and naps if the generate request fails due to 'already exists with the same name' error" do
       vm.update(allocated_at: now)
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Already exists - A runner with the name *** already exists."}))
       expect(client).to receive(:paginate)
         .and_yield({runners: [{name: runner.ubid.to_s, id: 123}]}, instance_double(Sawyer::Response, data: {runners: []}))
@@ -1069,7 +1020,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "fails if the generate request fails due to 'already exists with the same name' error but couldn't find the runner" do
       vm.update(allocated_at: now)
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Already exists - A runner with the name *** already exists."}))
       expect(client).to receive(:paginate).and_return({runners: []})
       expect(client).not_to receive(:delete)
@@ -1079,7 +1030,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "fails if the generate request fails due to 'Octokit::Conflict' but it's not already exists error" do
       vm.update(allocated_at: now)
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Another issue"}))
       expect { nx.wait_vm }.to raise_error Octokit::Conflict
     end
@@ -1088,7 +1039,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       vm.update(allocated_at: now)
       expect(client).to receive(:post).and_raise(Octokit::Error.new({body: "Repository level self-hosted runners are disabled"}))
       expect { nx.wait_vm }.to nap(0)
-        .and change { Page.active.count }.by(1)
+        .and change { Page.active.count }.from(0).to(1)
       expect(runner.destroy_set?).to be(true)
     end
   end
@@ -1235,14 +1186,9 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect(nx.known_kernel_boot_bug?).to be false
     end
 
-    it "is true when the serial log shows a known bug" do
-      expect(vm.vm_host.sshable).to receive(:_cmd).with(boot_bug_grep).and_return("match\n")
-      expect(nx.known_kernel_boot_bug?).to be true
-    end
-
-    it "is false when the serial log does not show a known bug" do
-      expect(vm.vm_host.sshable).to receive(:_cmd).with(boot_bug_grep).and_return("")
-      expect(nx.known_kernel_boot_bug?).to be false
+    it "is true only when the serial log shows a known bug" do
+      expect(vm.vm_host.sshable).to receive(:_cmd).with(boot_bug_grep).and_return("match\n", "")
+      expect([nx.known_kernel_boot_bug?, nx.known_kernel_boot_bug?]).to eq [true, false]
     end
 
     it "has signatures matching the known serial log lines" do
@@ -1254,7 +1200,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
   describe "#register_runner" do
     it "registers runner hops" do
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.label])).and_return({runner: {id: 123}, encoded_jit_config: "AABBCC$"})
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.label])).and_return({runner: {id: 123}, encoded_jit_config: "AABBCC$"})
       expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "AABBCC$", log: :on_error)
         sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
@@ -1266,7 +1212,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "deletes the runner if the generate request fails due to 'already exists with the same name' error and the runner script does not start yet." do
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Already exists - A runner with the name *** already exists."}))
       expect(client).to receive(:paginate)
         .and_yield({runners: [{name: runner.ubid.to_s, id: 123}]}, instance_double(Sawyer::Response, data: {runners: []}))
@@ -1279,7 +1225,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "hops to wait if the generate request fails due to 'already exists with the same name' error and the runner script is running" do
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Already exists - A runner with the name *** already exists."}))
       expect(client).to receive(:paginate)
         .and_yield({runners: [{name: runner.ubid.to_s, id: 123}]}, instance_double(Sawyer::Response, data: {runners: []}))
@@ -1292,7 +1238,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "fails if the generate request fails due to 'already exists with the same name' error but couldn't find the runner" do
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Already exists - A runner with the name *** already exists."}))
       expect(client).to receive(:paginate).and_return({runners: []})
       expect(client).not_to receive(:delete)
@@ -1301,20 +1247,20 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
     it "fails if the generate request fails due to 'Octokit::Conflict' but it's not already exists error" do
       expect(client).to receive(:post)
-        .with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.label]))
+        .with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.label]))
         .and_raise(Octokit::Conflict.new({body: "409 - Another issue"}))
       expect { nx.register_runner }.to raise_error Octokit::Conflict
     end
 
     it "destroys the runner if the generate request fails due to 'Octokit::NotFound'" do
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s)).and_raise(Octokit::NotFound)
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s)).and_raise(Octokit::NotFound)
       expect(Clog).to receive(:emit).with("Repository not found", {repository_not_found: {installation_ubid: runner.installation.ubid, label: runner.label, repository_name: runner.repository_name}}).and_call_original
       expect { nx.register_runner }.to nap(0)
       expect(runner.destroy_set?).to be(true)
     end
 
     it "fails without a log if the ssh error doesn't match" do
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.label])).and_return({runner: {id: 123}, encoded_jit_config: "AABBCC$"})
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.label])).and_return({runner: {id: 123}, encoded_jit_config: "AABBCC$"})
       expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "AABBCC$", log: :on_error).and_raise Sshable::SshError.new("command", "", "unknown command", 123, nil)
         sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
@@ -1326,7 +1272,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "handles common GitHub API errors during registration" do
       expect(client).to receive(:post).and_raise(Octokit::Error.new({body: "Repository level self-hosted runners are disabled"}))
       expect { nx.register_runner }.to nap(0)
-        .and change { Page.active.count }.by(1)
+        .and change { Page.active.count }.from(0).to(1)
       expect(runner.destroy_set?).to be(true)
     end
   end
@@ -1365,7 +1311,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       runner.update(encoded_jit_config: "OLD$", allocated_at: now - 20 * 60)
       vm.update(allocated_at: now - 20 * 60)
       expect(client).to receive(:delete).with("/repos/#{runner.repository_name}/actions/runners/123")
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 456}, encoded_jit_config: "NEW$"})
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 456}, encoded_jit_config: "NEW$"})
       expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "NEW$", log: :on_error)
         sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
@@ -1380,7 +1326,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       runner.update(encoded_jit_config: "OLD$", allocated_at: now - 20 * 60)
       vm.update(allocated_at: now - 20 * 60)
       expect(client).to receive(:delete).with("/repos/#{runner.repository_name}/actions/runners/123").and_raise(Octokit::NotFound)
-      expect(client).to receive(:post).with(/.*generate-jitconfig/, hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 456}, encoded_jit_config: "NEW$"})
+      expect(client).to receive(:post).with("/repos/#{runner.repository_name}/actions/runners/generate-jitconfig", hash_including(name: runner.ubid.to_s, labels: [runner.actual_label])).and_return({runner: {id: 456}, encoded_jit_config: "NEW$"})
       expect(vm.sshable).to receive(:_cmd).with(<<~COMMAND, stdin: "NEW$", log: :on_error)
         sudo -u runner tee /home/runner/actions-runner/.jit_token > /dev/null
         sudo systemctl start runner-script.service
@@ -1405,7 +1351,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect(client).to receive(:rate_limit).and_return(instance_double(Octokit::RateLimit, remaining: 0, limit: 5000, resets_at: now + 300))
       refresh_frame(nx, new_values: {"deadline_target" => "wait", "deadline_at" => (now - 5 * 60).to_s})
       expect { nx.rescue_common_github_api_errors { raise Octokit::TooManyRequests.new({body: "API rate limit exceeded"}) } }.to nap(300)
-        .and change { Page.count }.by(1)
+        .and change { Page.count }.from(0).to(1)
       expect(Time.new(nx.frame["deadline_at"])).to eq(now + 10 * 60)
       expect(Page.first).to have_attributes(
         summary: "GitHub API rate limit exceeded for installation #{installation.ubid}",
@@ -1426,7 +1372,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     it "destroys the runner if the rate limit reset is more than 10 minutes away while provisioning" do
       expect(client).to receive(:rate_limit).and_return(instance_double(Octokit::RateLimit, remaining: 0, limit: 5000, resets_at: now + 11 * 60))
       expect { nx.rescue_common_github_api_errors { raise Octokit::TooManyRequests.new({body: "API rate limit exceeded"}) } }.to nap
-        .and change { Page.active.count }.by(1)
+        .and change { Page.active.count }.from(0).to(1)
       expect(runner.destroy_set?).to be(true)
     end
 
@@ -1434,7 +1380,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect(client).to receive(:rate_limit).and_return(instance_double(Octokit::RateLimit, remaining: 0, limit: 5000, resets_at: now + 16 * 60))
       nx.incr_destroying
       expect { nx.rescue_common_github_api_errors { raise Octokit::TooManyRequests.new({body: "API rate limit exceeded"}) } }.to nap
-        .and change { Page.count }.by(1)
+        .and change { Page.count }.from(0).to(1)
       expect(runner.skip_deregistration_set?).to be(true)
     end
 
@@ -1826,43 +1772,36 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     end
 
     it "destroys resources and hops if runner deregistered" do
-      vm.update(allocated_at: Time.now)
-      expect(nx).to receive(:decr_destroy)
+      vm.update(allocated_at: now)
+      Strand.create_with_id(vm, prog: "Vm::Nexus", label: "wait")
+      runner.incr_destroy
       expect(client).to receive(:get).and_raise(Octokit::NotFound)
       expect(client).not_to receive(:delete)
       expect(nx).to receive(:collect_final_telemetry)
       ps = Prog::Vnet::SubnetNexus.assemble(vm.project_id, allow_only_ssh: true).subject
       firewall = ps.firewalls.first
       Nic.create(private_subnet_id: ps.id, private_ipv4: "10.0.0.5/32", private_ipv6: "fd10:9b0b:6b4b:8fbb::/79", name: "runner-nic", state: "active", vm_id: vm.id)
-      expect(vm).to receive(:incr_destroy)
 
       expect { nx.destroy }.to hop("wait_vm_destroy")
       expect(ps.destroy_set?).to be(true)
       expect(firewall).not_to exist
+      expect([runner.semaphores_dataset.select_map(:name), vm.semaphores_dataset.select_map(:name)]).to eq [[], ["destroy"]]
     end
 
-    it "keeps the private subnet the installation shares between its runners" do
+    it "skips deregistration, telemetry for an unallocated vm, and keeps the private subnet the installation shares between its runners" do
       runner.incr_skip_deregistration
       Strand.create_with_id(vm, prog: "Vm::Nexus", label: "wait")
       ps = Prog::Vnet::SubnetNexus.assemble(vm.project_id, allow_only_ssh: true).subject
       installation.add_private_subnet(ps)
       firewall = ps.firewalls.first
       Nic.create(private_subnet_id: ps.id, private_ipv4: "10.0.0.5/32", private_ipv6: "fd10:9b0b:6b4b:8fbb::/79", name: "runner-nic", state: "active", vm_id: vm.id)
+      expect(client).not_to receive(:get)
+      expect(nx).not_to receive(:collect_final_telemetry)
 
       expect { nx.destroy }.to hop("wait_vm_destroy")
       expect(ps.destroy_set?).to be(false)
       expect(firewall).to exist
       expect(vm.destroy_set?(cached: false)).to be(true)
-    end
-
-    it "skip deregistration and destroy vm immediately" do
-      vm.update(allocated_at: Time.now)
-      expect(nx).to receive(:decr_destroy)
-      expect(runner).to receive(:skip_deregistration_set?).and_return(true)
-      expect(nx).to receive(:collect_final_telemetry)
-      expect(vm).to receive(:incr_destroy)
-
-      expect { nx.destroy }.to hop("wait_vm_destroy")
     end
 
     it "skips deregistration when workflow job status is completed" do
@@ -1879,66 +1818,54 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
       expect { nx.destroy }.to nap(15)
     end
 
-    it "does not collect telemetry if the vm not allocated" do
-      vm.update(vm_host_id: nil)
-      expect(nx).to receive(:decr_destroy)
-      expect(client).to receive(:get).and_raise(Octokit::NotFound)
-      expect(nx).not_to receive(:collect_final_telemetry)
-      expect(vm).to receive(:incr_destroy)
-
-      expect { nx.destroy }.to hop("wait_vm_destroy")
-    end
-
     it "does not destroy vm if it's already destroyed" do
       runner.update(vm_id: nil, location_id: nil)
-      expect(nx).to receive(:vm).and_return(nil).at_least(:once)
-      expect(nx).to receive(:decr_destroy)
       expect(client).to receive(:get).and_raise(Octokit::NotFound)
       expect(client).not_to receive(:delete)
 
       expect { nx.destroy }.to hop("wait_vm_destroy")
     end
 
-    it "updates custom label allocated runner count" do
-      custom_label = GithubCustomLabel.create(installation_id: installation.id, name: "custom-label-1", alias_for: "ubicloud-standard-4", concurrent_runner_count_limit: 10, allocated_runner_count: 5)
-      expect(runner).to receive(:skip_deregistration_set?).and_return(true)
-      expect(runner).to receive(:actual_label).and_return("custom-label-1").twice
-      expect(runner).to receive(:installation_id).and_return(installation.id).twice
+    describe "with a custom label" do
+      before do
+        runner.update(actual_label: "custom-label-1")
+        runner.incr_skip_deregistration
+      end
 
-      expect { nx.destroy }.to hop("wait_vm_destroy")
-      custom_label.reload
-      expect(custom_label.allocated_runner_count).to eq(4)
-    end
+      it "updates custom label allocated runner count" do
+        custom_label = GithubCustomLabel.create(installation_id: installation.id, name: "custom-label-1", alias_for: "ubicloud-standard-4", concurrent_runner_count_limit: 10, allocated_runner_count: 5)
 
-    it "does not decrement custom label allocated runner count when already zero" do
-      custom_label = GithubCustomLabel.create(installation_id: installation.id, name: "custom-label-1", alias_for: "ubicloud-standard-4", concurrent_runner_count_limit: 10, allocated_runner_count: 0)
-      expect(runner).to receive(:skip_deregistration_set?).and_return(true)
-      expect(runner).to receive(:actual_label).and_return("custom-label-1").exactly(3).times
-      expect(runner).to receive(:installation_id).and_return(installation.id).exactly(3).times
-      expect(Clog).to receive(:emit).with("failed to decrement custom label allocated runner count", instance_of(Hash)).and_call_original
+        expect { nx.destroy }.to hop("wait_vm_destroy")
+        expect(custom_label.reload.allocated_runner_count).to eq(4)
+      end
 
-      expect { nx.destroy }.to hop("wait_vm_destroy")
-      custom_label.reload
-      expect(custom_label.allocated_runner_count).to eq(0)
+      it "does not decrement custom label allocated runner count when already zero" do
+        custom_label = GithubCustomLabel.create(installation_id: installation.id, name: "custom-label-1", alias_for: "ubicloud-standard-4", concurrent_runner_count_limit: 10, allocated_runner_count: 0)
+        expect(Clog).to receive(:emit).with("failed to decrement custom label allocated runner count", instance_of(Hash)).and_call_original
+
+        expect { nx.destroy }.to hop("wait_vm_destroy")
+        expect(custom_label.reload.allocated_runner_count).to eq(0)
+      end
     end
   end
 
   describe "#wait_vm_destroy" do
     it "naps if vm not destroyed yet" do
+      expect(nx).not_to receive(:register_deadline)
       expect { nx.wait_vm_destroy }.to nap(10)
     end
 
     it "extends deadline if vm prevents destroy" do
-      expect(runner.vm).to receive(:prevent_destroy_set?).and_return(true)
+      Strand.create_with_id(vm, prog: "Vm::Nexus", label: "wait")
+      vm.incr_prevent_destroy
       expect(nx).to receive(:register_deadline).with(nil, 15 * 60, allow_extension: true)
       expect { nx.wait_vm_destroy }.to nap(10)
     end
 
     it "pops if vm destroyed" do
-      expect(nx).to receive(:vm).and_return(nil).twice
-      expect(runner).to receive(:destroy)
-
+      runner.update(vm_id: nil, location_id: nil)
       expect { nx.wait_vm_destroy }.to exit({"msg" => "github runner deleted"})
+      expect(runner).not_to exist
     end
   end
 
