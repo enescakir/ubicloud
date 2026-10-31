@@ -98,11 +98,14 @@ RSpec.describe Prog::Vm::Metal::Nexus do
       }.to raise_error RuntimeError, "No existing location in project"
     end
 
-    it "creates Subnet and Nic if not passed" do
+    it "creates Subnet and Nic if not passed, with one tracked volume of the default storage size and no gpus" do
+      st = nil
       expect {
-        Prog::Vm::Nexus.assemble("some_ssh key", project.id)
+        st = Prog::Vm::Nexus.assemble("some_ssh key", project.id)
       }.to change(PrivateSubnet, :count).from(0).to(1)
         .and change(Nic, :count).from(0).to(1)
+      expect(st.stack.first["storage_volumes"].map { it.values_at("size_gib", "track_written") }).to eq([[Option::VmSizes.first.storage_size_options.first, true]])
+      expect(st.stack.first["gpu_count"]).to eq(0)
     end
 
     it "creates Nic if only subnet_id is passed" do
@@ -118,24 +121,10 @@ RSpec.describe Prog::Vm::Metal::Nexus do
       Prog::Vm::Nexus.assemble("some_ssh key", project.id, nic_id: nic.id, location_id: Location::HETZNER_FSN1_ID)
     end
 
-    it "creates with default storage size from vm size" do
-      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id)
-      expect(st.stack.first["storage_volumes"].first["size_gib"]).to eq(Option::VmSizes.first.storage_size_options.first)
-    end
-
-    it "creates with custom storage size if provided" do
-      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id, storage_volumes: [{size_gib: 40}])
-      expect(st.stack.first["storage_volumes"].first["size_gib"]).to eq(40)
-    end
-
-    it "sets track_written for a single writeable volume" do
-      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id, storage_volumes: [{size_gib: 20}])
-      expect(st.stack.first["storage_volumes"].first["track_written"]).to be(true)
-    end
-
-    it "sets track_written on every writeable volume when there are multiple" do
-      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id, storage_volumes: [{size_gib: 20}, {size_gib: 10}])
-      expect(st.stack.first["storage_volumes"].map { it["track_written"] }).to eq([true, true])
+    it "creates with custom storage sizes, tracking writes on every writeable volume, and requests as many gpus as specified" do
+      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id, size: "standard-2", gpu_count: 2, storage_volumes: [{size_gib: 40}, {size_gib: 10}])
+      expect(st.stack.first["storage_volumes"].map { it.values_at("size_gib", "track_written") }).to eq([[40, true], [10, true]])
+      expect(st.stack.first["gpu_count"]).to eq(2)
     end
 
     it "does not set track_written for a read-only volume" do
@@ -359,16 +348,6 @@ RSpec.describe Prog::Vm::Metal::Nexus do
       expect(st.subject.memory_gib).to eq(12)
     end
 
-    it "requests as many gpus as specified" do
-      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id, size: "standard-2", gpu_count: 2)
-      expect(st.stack.first["gpu_count"]).to eq(2)
-    end
-
-    it "requests no gpus by default" do
-      st = Prog::Vm::Nexus.assemble("some_ssh key", project.id, size: "standard-2")
-      expect(st.stack.first["gpu_count"]).to eq(0)
-    end
-
     it "fails if same host is forced and excluded" do
       expect {
         Prog::Vm::Nexus.assemble("some_ssh key", project.id,
@@ -514,7 +493,7 @@ RSpec.describe Prog::Vm::Metal::Nexus do
         project.set_ff_ipv6_disabled(true)
 
         expect(sshable).to receive(:_cmd).with("common/bin/daemonizer --check prep_#{nx.vm_name}").and_return("NotStarted")
-        expect(sshable).to receive(:_cmd).with(/sudo -u vm[0-9a-z]+ tee/, stdin: String, log: :on_error) do |**kwargs|
+        expect(sshable).to receive(:_cmd).with("sudo -u #{nx.vm_name} tee #{nx.params_path} > /dev/null", stdin: String, log: :on_error) do |**kwargs|
           require "json"
           params = JSON(kwargs.fetch(:stdin))
           expect(params).to include(
@@ -805,121 +784,58 @@ RSpec.describe Prog::Vm::Metal::Nexus do
       expect { nx.start }.to hop("create_unix_user")
     end
 
-    it "considers filtered locations for runners if set for the installation" do
-      installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: project.id, created_at: Time.now - 8 * 24 * 60 * 60, allocator_preferences: {"location_filter" => [Location::GITHUB_RUNNERS_ID, Location::LEASEWEB_WDC02_ID]})
-      GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "ubicloud/test", label: "ubicloud", installation_id: installation.id)
-      vm.location_id = Location::GITHUB_RUNNERS_ID
+    describe "for runners" do
+      before { vm.location_id = Location::GITHUB_RUNNERS_ID }
 
-      expect(Scheduling::Allocator).to receive(:allocate).with(
-        vm, storage_volumes,
-        allocation_state_filter: ["accepting"],
-        distinct_storage_devices: false,
-        host_filter: [],
-        host_exclusion_filter: [],
-        data_center_exclusion_filter: [],
-        location_filter: [Location::GITHUB_RUNNERS_ID, Location::LEASEWEB_WDC02_ID],
-        location_preference: [Location::GITHUB_RUNNERS_ID],
-        gpu_count: 0,
-        gpu_device: nil,
-        os_filter: nil,
-        family_filter: ["standard"],
-      )
-      expect { nx.start }.to hop("create_unix_user")
-    end
+      def create_runner(allocator_preferences)
+        installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: project.id, created_at: Time.now - 8 * 24 * 60 * 60, allocator_preferences:)
+        GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "ubicloud/test", label: "ubicloud", installation_id: installation.id)
+      end
 
-    it "considers preferred locations for runners if set for the installation" do
-      installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: project.id, created_at: Time.now - 8 * 24 * 60 * 60, allocator_preferences: {
-        "location_filter" => [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID, Location::LEASEWEB_WDC02_ID],
-        "location_preference" => [Location::LEASEWEB_WDC02_ID],
-      })
-      GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "ubicloud/test", label: "ubicloud", installation_id: installation.id)
-      vm.location_id = Location::GITHUB_RUNNERS_ID
+      def expect_allocate(**filters)
+        expect(Scheduling::Allocator).to receive(:allocate).with(
+          vm, storage_volumes,
+          allocation_state_filter: ["accepting"],
+          distinct_storage_devices: false,
+          host_filter: [],
+          data_center_exclusion_filter: [],
+          gpu_count: 0,
+          gpu_device: nil,
+          os_filter: nil,
+          **filters,
+        )
+      end
 
-      expect(Scheduling::Allocator).to receive(:allocate).with(
-        vm, storage_volumes,
-        allocation_state_filter: ["accepting"],
-        distinct_storage_devices: false,
-        host_filter: [],
-        host_exclusion_filter: [],
-        data_center_exclusion_filter: [],
-        location_filter: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID, Location::LEASEWEB_WDC02_ID],
-        location_preference: [Location::LEASEWEB_WDC02_ID],
-        gpu_count: 0,
-        gpu_device: nil,
-        os_filter: nil,
-        family_filter: ["standard"],
-      )
-      expect { nx.start }.to hop("create_unix_user")
-    end
+      it "considers filtered locations, preferring the runner location, and combines installation host exclusions with the caller-provided exclude_host_ids" do
+        excluded_host_id = VmHost.generate_uuid
+        called_host_id = VmHost.generate_uuid
+        create_runner("location_filter" => [Location::GITHUB_RUNNERS_ID, Location::LEASEWEB_WDC02_ID], "host_exclusion_filter" => [excluded_host_id])
+        st.stack = [{"storage_volumes" => storage_volumes, "exclude_host_ids" => [called_host_id]}]
 
-    it "excludes hosts for runners if set for the installation" do
-      excluded_host_id = VmHost.generate_uuid
-      installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: project.id, allocator_preferences: {"host_exclusion_filter" => [excluded_host_id]})
-      GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "ubicloud/test", label: "ubicloud", installation_id: installation.id)
-      vm.location_id = Location::GITHUB_RUNNERS_ID
+        expect_allocate(
+          host_exclusion_filter: [called_host_id, excluded_host_id],
+          location_filter: [Location::GITHUB_RUNNERS_ID, Location::LEASEWEB_WDC02_ID],
+          location_preference: [Location::GITHUB_RUNNERS_ID],
+          family_filter: ["standard"],
+        )
+        expect { nx.start }.to hop("create_unix_user")
+      end
 
-      expect(Scheduling::Allocator).to receive(:allocate).with(
-        vm, storage_volumes,
-        allocation_state_filter: ["accepting"],
-        distinct_storage_devices: false,
-        host_filter: [],
-        host_exclusion_filter: [excluded_host_id],
-        data_center_exclusion_filter: [],
-        location_filter: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID],
-        location_preference: [Location::GITHUB_RUNNERS_ID],
-        gpu_count: 0,
-        gpu_device: nil,
-        os_filter: nil,
-        family_filter: ["standard"],
-      )
-      expect { nx.start }.to hop("create_unix_user")
-    end
+      it "considers preferred locations and families if set for the installation" do
+        create_runner(
+          "location_filter" => [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID, Location::LEASEWEB_WDC02_ID],
+          "location_preference" => [Location::LEASEWEB_WDC02_ID],
+          "family_filter" => ["standard", "premium"],
+        )
 
-    it "combines installation host exclusions with the caller-provided exclude_host_ids" do
-      excluded_host_id = VmHost.generate_uuid
-      called_host_id = VmHost.generate_uuid
-      installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: project.id, allocator_preferences: {"host_exclusion_filter" => [excluded_host_id]})
-      GithubRunner.create(vm_id: vm.id, location_id: vm.location_id, repository_name: "ubicloud/test", label: "ubicloud", installation_id: installation.id)
-      vm.location_id = Location::GITHUB_RUNNERS_ID
-      st.stack = [{"storage_volumes" => storage_volumes, "exclude_host_ids" => [called_host_id]}]
-
-      expect(Scheduling::Allocator).to receive(:allocate).with(
-        vm, storage_volumes,
-        allocation_state_filter: ["accepting"],
-        distinct_storage_devices: false,
-        host_filter: [],
-        host_exclusion_filter: [called_host_id, excluded_host_id],
-        data_center_exclusion_filter: [],
-        location_filter: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID],
-        location_preference: [Location::GITHUB_RUNNERS_ID],
-        gpu_count: 0,
-        gpu_device: nil,
-        os_filter: nil,
-        family_filter: ["standard"],
-      )
-      expect { nx.start }.to hop("create_unix_user")
-    end
-
-    it "considers preferred families for runners if set for the installation" do
-      vm.location_id = Location::GITHUB_RUNNERS_ID
-      installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: project.id, allocator_preferences: {"family_filter" => ["standard", "premium"]})
-      GithubRunner.create(label: "ubicloud", repository_name: "ubicloud/test", installation_id: installation.id, vm_id: vm.id, location_id: vm.location_id)
-
-      expect(Scheduling::Allocator).to receive(:allocate).with(
-        vm, storage_volumes,
-        allocation_state_filter: ["accepting"],
-        distinct_storage_devices: false,
-        host_filter: [],
-        host_exclusion_filter: [],
-        data_center_exclusion_filter: [],
-        location_filter: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID],
-        location_preference: [Location::GITHUB_RUNNERS_ID],
-        gpu_count: 0,
-        gpu_device: nil,
-        os_filter: nil,
-        family_filter: ["standard", "premium"],
-      )
-      expect { nx.start }.to hop("create_unix_user")
+        expect_allocate(
+          host_exclusion_filter: [],
+          location_filter: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID, Location::LEASEWEB_WDC02_ID],
+          location_preference: [Location::LEASEWEB_WDC02_ID],
+          family_filter: ["standard", "premium"],
+        )
+        expect { nx.start }.to hop("create_unix_user")
+      end
     end
 
     it "allows premium family allocation if free runner upgrade runner is enabled" do
@@ -1099,7 +1015,7 @@ RSpec.describe Prog::Vm::Metal::Nexus do
 
     it "is false when the boot volume's machine image belongs to a service project" do
       service_project = Project.create(name: "base-mi")
-      allow(Config).to receive(:machine_images_service_project_id).and_return(service_project.id)
+      expect(Config).to receive(:machine_images_service_project_id).and_return(service_project.id).at_least(:once)
       metal = create_machine_image_version_metal(project_id: service_project.id)
       VmStorageVolume.create(vm_id: vm.id, boot: true, size_gib: 5, disk_index: 0, machine_image_version_id: metal.id)
       expect(nx.boots_from_customer_machine_image?).to be(false)
@@ -1305,7 +1221,7 @@ RSpec.describe Prog::Vm::Metal::Nexus do
 
     it "cleans the prep daemonizer state when requested" do
       vm.incr_clean_prep
-      expect(sshable).to receive(:_cmd).with(/common\/bin\/daemonizer --clean prep_/, log: :on_error)
+      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer --clean prep_#{nx.vm_name}", log: :on_error)
       expect { nx.wait }.to nap(6 * 60 * 60)
         .and change { vm.clean_prep_set?(cached: false) }.from(true).to(false)
     end
