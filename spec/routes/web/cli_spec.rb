@@ -162,8 +162,8 @@ RSpec.describe Clover, "web shell" do
     expect(page.title).to eq "Ubicloud - Web Shell"
     expect(page).to have_flash_error "Unable to parse CLI command: Unmatched quote at 3: ...'"
     expect(page.find_by_id("cli").value).to eq "ps 'list"
-    expect { page.find_by_id("cli-executed") }.to raise_error(Capybara::ElementNotFound)
-    expect { page.find_by_id("cli-output") }.to raise_error(Capybara::ElementNotFound)
+    expect(page).to have_no_css "#cli-executed"
+    expect(page).to have_no_css "#cli-output"
   end
 
   it "handles errors when parsing commands the scheduling multiple commands" do
@@ -177,8 +177,8 @@ RSpec.describe Clover, "web shell" do
     expect(ps).to be_nil
     expect(page.find_by_id("cli").value).to eq "'ps eu-central-h1/bar create"
     expect(page.all(".next-clis").map(&:text)).to eq ["ps eu-central-h1/bar show -f id"]
-    expect { page.find_by_id("cli-executed") }.to raise_error(Capybara::ElementNotFound)
-    expect { page.find_by_id("cli-output") }.to raise_error(Capybara::ElementNotFound)
+    expect(page).to have_no_css "#cli-executed"
+    expect(page).to have_no_css "#cli-output"
 
     fill_in "cli", with: "ps eu-central-h1/bar create"
     click_button "Run"
