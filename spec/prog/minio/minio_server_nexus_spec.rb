@@ -386,7 +386,7 @@ RSpec.describe Prog::Minio::MinioServerNexus do
 
     it "hops to refresh_certificates weekly for publicly signed clusters, registering a deadline so a stalled renewal pages" do
       DnsZone.create(project_id: minio_project.id, name: Config.minio_host_name)
-      allow(Config).to receive_messages(acme_email: "test@ubicloud.com")
+      expect(Config).to receive_messages(acme_email: "test@ubicloud.com")
       nx.minio_server.cluster.update(root_cert_1: nil, root_cert_key_1: nil, root_cert_2: nil, root_cert_key_2: nil)
       nx.minio_server.update(certificate_last_checked_at: Time.now - 60 * 60 * 24 * 7 - 1)
       expect { nx.wait }.to hop("refresh_certificates")
@@ -405,16 +405,16 @@ RSpec.describe Prog::Minio::MinioServerNexus do
       # must win so the server can serve the new cert instead of getting stuck
       # in an unavailable/restart loop.
       nx.incr_reconfigure
-      allow(nx).to receive(:when_checkup_set?).and_yield
-      allow(nx).to receive(:available?).and_return(false)
+      nx.incr_checkup
+      expect(nx).not_to receive(:available?)
       expect(nx).to receive(:bud).with(Prog::Minio::SetupMinio, {}, :configure_minio)
       expect { nx.wait }.to hop("wait_reconfigure")
     end
 
     it "starts a pending switch_to_public_certs before acting on a failing checkup" do
       nx.incr_switch_to_public_certs
-      allow(nx).to receive(:when_checkup_set?).and_yield
-      allow(nx).to receive(:available?).and_return(false)
+      nx.incr_checkup
+      expect(nx).not_to receive(:available?)
       expect { nx.wait }.to hop("switch_to_public_certs")
     end
   end
