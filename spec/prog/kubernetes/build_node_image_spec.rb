@@ -56,14 +56,14 @@ RSpec.describe Prog::Kubernetes::BuildNodeImage do
     end
 
     it "rejects a missing kubernetes service project" do
-      allow(Config).to receive(:kubernetes_service_project_id).and_return(nil)
+      expect(Config).to receive(:kubernetes_service_project_id).and_return(nil)
 
       expect { described_class.assemble(kubernetes_version: "v1.35", location_id:, image_version: "20260730.1.0") }
         .to raise_error RuntimeError, "no kubernetes service project"
     end
 
     it "rejects a missing machine images service project" do
-      allow(Config).to receive(:machine_images_service_project_id).and_return(nil)
+      expect(Config).to receive(:machine_images_service_project_id).and_return(nil)
 
       expect { described_class.assemble(kubernetes_version: "v1.35", location_id:, image_version: "20260730.1.0") }
         .to raise_error RuntimeError, "no machine images service project"
