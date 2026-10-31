@@ -326,7 +326,7 @@ RSpec.describe Prog::MachineImage::VersionMetalNexus do
 
     it "naps 30 on per-object delete errors" do
       s3.stub_responses(:list_objects_v2, {contents: [{key: "a"}], is_truncated: false})
-      allow(s3).to receive(:delete_objects).and_return(
+      expect(s3).to receive(:delete_objects).and_return(
         Aws::S3::Types::DeleteObjectsOutput.new(deleted: [],
           errors: [Aws::S3::Types::Error.new(key: "a", code: "AccessDenied", message: "no")]),
       )
@@ -334,7 +334,7 @@ RSpec.describe Prog::MachineImage::VersionMetalNexus do
     end
 
     it "logs and naps on transient object-store errors instead of raising" do
-      allow(s3).to receive(:list_objects_v2).and_raise(Seahorse::Client::NetworkingError.new(Net::ReadTimeout.new))
+      expect(s3).to receive(:list_objects_v2).and_raise(Seahorse::Client::NetworkingError.new(Net::ReadTimeout.new))
       expect(Clog).to receive(:emit).with("Error deleting machine image archive objects", machine_image_archive_delete_error: hash_including(exception: hash_including(class: "Seahorse::Client::NetworkingError")))
       expect { prog.destroy_objects }.to nap(30)
     end
