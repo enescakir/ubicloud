@@ -59,7 +59,7 @@ PGDATA=/dat/17/data
       end
 
       it "appends the hardware-sized config on local-SSD instances when enabled" do
-        allow(postgres_timeline).to receive(:leader).and_return(instance_double(PostgresServer,
+        expect(postgres_timeline).to receive(:leader).thrice.and_return(instance_double(PostgresServer,
           resource: instance_double(PostgresResource, project: instance_double(Project, get_ff_postgres_walg_optimized_config_disabled: false, get_ff_postgres_walg_direct_io_disabled: false))))
         server = instance_double(PostgresServer, vm: instance_double(Vm, vcpus: 8, memory_gib: 32),
           storage_device_paths: ["/dev/nvme0n1", "/dev/nvme1n1"],
@@ -72,7 +72,7 @@ PGDATA=/dat/17/data
       end
 
       it "leaves stock config (no hardware knobs) when the server has no vm yet" do
-        allow(postgres_timeline).to receive(:leader).and_return(instance_double(PostgresServer,
+        expect(postgres_timeline).to receive(:leader).twice.and_return(instance_double(PostgresServer,
           resource: instance_double(PostgresResource, project: instance_double(Project, get_ff_postgres_walg_optimized_config_disabled: nil))))
 
         expect(postgres_timeline.generate_walg_config(17, instance_double(PostgresServer, vm: nil))).not_to include("WALG_UPLOAD_DISK_CONCURRENCY")
