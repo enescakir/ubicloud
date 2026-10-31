@@ -78,7 +78,7 @@ RSpec.describe KubernetesNode do
 
     it "observes the metrics backlog at export counts where count % 12 == 1" do
       session[:export_count] = 12
-      allow(kn).to receive(:scrape_endpoints).and_return([])
+      expect(kn).to receive(:scrape_endpoints).and_return([])
       expect(kn).to receive(:observe_metrics_backlog).with(session)
 
       kn.export_metrics(session:, tsdb_client:)
@@ -86,14 +86,14 @@ RSpec.describe KubernetesNode do
 
     it "does not observe the metrics backlog when count % 12 != 1" do
       session[:export_count] = 2
-      allow(kn).to receive(:scrape_endpoints).and_return([])
+      expect(kn).to receive(:scrape_endpoints).and_return([])
       expect(kn).not_to receive(:observe_metrics_backlog)
 
       kn.export_metrics(session:, tsdb_client:)
     end
 
     it "increments export_count in session" do
-      allow(kn).to receive_messages(observe_metrics_backlog: nil, scrape_endpoints: [])
+      expect(kn).to receive_messages(observe_metrics_backlog: nil, scrape_endpoints: [])
 
       kn.export_metrics(session:, tsdb_client:)
       expect(session[:export_count]).to eq 1
