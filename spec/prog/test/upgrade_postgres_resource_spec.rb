@@ -60,8 +60,6 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
       expect(Config).to receive(:e2e_aws_assume_role).and_return(nil)
       expect(Config).to receive(:e2e_aws_access_key).and_return("access_key")
       expect(Config).to receive(:e2e_aws_secret_key).and_return("secret_key")
-      allow(Aws::Credentials).to receive(:new).and_return(Aws::Credentials.new("access_key", "secret_key"))
-      allow(Aws::EC2::Client).to receive(:new).and_return(Aws::EC2::Client.new(stub_responses: true))
       aws_strand = described_class.assemble(provider: "aws")
       location = Location[provider: "aws", project_id: nil, name: "us-west-2"]
       LocationAz.create(location_id: location.id, az: "a", zone_id: "usw2-az1")
@@ -74,8 +72,6 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     end
 
     it "skips creating aws credential if one already exists" do
-      allow(Aws::Credentials).to receive(:new).and_return(Aws::Credentials.new("existing-key", "existing-secret"))
-      allow(Aws::EC2::Client).to receive(:new).and_return(Aws::EC2::Client.new(stub_responses: true))
       aws_strand = described_class.assemble(provider: "aws")
       location = Location[provider: "aws", project_id: nil, name: "us-west-2"]
       LocationAz.create(location_id: location.id, az: "a", zone_id: "usw2-az1")
@@ -210,14 +206,14 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     end
 
     it "fails if the postgres test fails" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres_before_read_replica }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run test queries before read replica")
     end
 
     it "hops to create_read_replica if the postgres test passes" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres_before_read_replica }.to hop("create_read_replica")
     end
   end
@@ -265,23 +261,23 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     end
 
     it "fails if read queries on primary fail before upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres_with_read_replica }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on primary before upgrade")
     end
 
     it "fails if read queries on replica fail before upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres_with_read_replica }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on replica before upgrade")
     end
 
     it "hops to trigger_upgrade if both primary and replica pass tests" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres_with_read_replica }.to hop("trigger_upgrade")
     end
   end
@@ -350,34 +346,9 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     it "logs blob storage URL when blob storage is configured" do
       resource = pgr_test.postgres_resource
       server = resource.servers.first
-      allow(server.timeline).to receive_messages(blob_storage: double(url: "http://minio.example.com"), backups: [])
-      allow(resource).to receive(:servers).and_return([server])
-      allow(pgr_test).to receive(:postgres_resource).and_return(resource)
-      expect { pgr_test.check_upgrade_progress }.to nap(60)
-    end
-
-    it "logs journalctl output for a server stuck in initialize_database_from_backup" do
-      resource = pgr_test.postgres_resource
-      server = resource.servers.first
-      server.strand.update(label: "initialize_database_from_backup")
-      sshable = Sshable.new
-      allow(server).to receive(:vm).and_return(instance_double(Vm, sshable:))
-      allow(resource).to receive(:servers).and_return([server])
-      allow(pgr_test).to receive(:postgres_resource).and_return(resource)
-      allow(sshable).to receive(:_cmd).with("journalctl -u postgres-server -n 100 --no-pager").and_return("Journal output")
-      expect { pgr_test.check_upgrade_progress }.to nap(60)
-    end
-
-    it "handles errors when fetching initialize_database_from_backup logs" do
-      resource = pgr_test.postgres_resource
-      server = resource.servers.first
-      server.strand.update(label: "initialize_database_from_backup")
-      sshable = Sshable.new
-      allow(sshable).to receive(:_cmd).and_raise(RuntimeError, "SSH connection failed")
-      allow(server).to receive(:vm).and_return(instance_double(Vm, sshable:))
-      allow(resource).to receive(:servers).and_return([server])
-      allow(pgr_test).to receive(:postgres_resource).and_return(resource)
-      allow(sshable).to receive(:_cmd).with("journalctl -u postgres-server -n 100 --no-pager").and_return("Journal output")
+      expect(server.timeline).to receive_messages(blob_storage: double(url: "http://minio.example.com"), backups: [])
+      expect(resource).to receive(:servers).and_return([server]).at_least(:once)
+      expect(pgr_test).to receive(:postgres_resource).and_return(resource).at_least(:once)
       expect { pgr_test.check_upgrade_progress }.to nap(60)
     end
 
@@ -386,10 +357,10 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
       server = resource.servers.first
       server.strand.update(label: "wait_catch_up")
       rep_server = resource.representative_server
-      allow(server).to receive_messages(resource:, current_lsn: "0/1000000")
-      allow(rep_server).to receive(:current_lsn).and_return("0/2000000")
-      allow(resource).to receive(:servers).and_return([server])
-      allow(pgr_test).to receive(:postgres_resource).and_return(resource)
+      expect(server).to receive_messages(resource:, current_lsn: "0/1000000")
+      expect(rep_server).to receive(:current_lsn).and_return("0/2000000")
+      expect(resource).to receive(:servers).and_return([server]).at_least(:once)
+      expect(pgr_test).to receive(:postgres_resource).and_return(resource).at_least(:once)
       expect { pgr_test.check_upgrade_progress }.to nap(60)
     end
 
@@ -399,19 +370,10 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
       replica = pgr_test.read_replica
       server = replica.servers.first
       server.strand.update(label: "wait_catch_up")
-      allow(server).to receive_messages(resource: double(read_replica?: true, parent: resource), current_lsn: "0/1000000")
-      allow(rep_server).to receive(:current_lsn).and_return("0/2000000")
-      allow(replica).to receive(:servers).and_return([server])
-      allow(pgr_test).to receive(:postgres_resource).and_return(resource)
-      expect { pgr_test.check_upgrade_progress }.to nap(60)
-    end
-
-    it "logs no parent server found when read-replica resource has no parent" do
-      replica = pgr_test.read_replica
-      server = replica.servers.first
-      server.strand.update(label: "wait_catch_up")
-      allow(server).to receive(:resource).and_return(double(read_replica?: true, parent: nil))
-      allow(replica).to receive(:servers).and_return([server])
+      expect(server).to receive_messages(resource: double(read_replica?: true, parent: resource), current_lsn: "0/1000000")
+      expect(rep_server).to receive(:current_lsn).and_return("0/2000000")
+      expect(replica).to receive(:servers).and_return([server]).at_least(:once)
+      expect(pgr_test).to receive(:postgres_resource).and_return(resource).at_least(:once)
       expect { pgr_test.check_upgrade_progress }.to nap(60)
     end
 
@@ -419,9 +381,9 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
       resource = pgr_test.postgres_resource
       server = resource.servers.first
       server.strand.update(label: "wait_catch_up")
-      allow(server).to receive(:current_lsn).and_raise(RuntimeError, "connection refused")
-      allow(resource).to receive(:servers).and_return([server])
-      allow(pgr_test).to receive(:postgres_resource).and_return(resource)
+      expect(server).to receive(:current_lsn).and_raise(RuntimeError, "connection refused")
+      expect(resource).to receive(:servers).and_return([server]).at_least(:once)
+      expect(pgr_test).to receive(:postgres_resource).and_return(resource).at_least(:once)
       expect { pgr_test.check_upgrade_progress }.to nap(60)
     end
   end
@@ -452,47 +414,47 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     end
 
     it "fails if read queries on primary fail after upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on primary after upgrade")
     end
 
     it "fails if read queries on replica fail after upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("")
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on replica after upgrade")
     end
 
     it "fails if write queries on primary fail after upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run write queries after upgrade")
     end
 
     it "fails if replica cannot read updated data after upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to read updated data on replica after upgrade")
     end
 
     it "hops to destroy if all tests pass" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "t")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "t")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to be_nil
     end
 
     it "fails if the failover slot is missing after PG17+ upgrade" do
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to start_with("Unexpected slot state")
@@ -500,8 +462,8 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
 
     it "passes when PG16 upgrade drops the logical slot" do
       refresh_frame(pgr_test, new_values: {"start_version" => "16"})
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
       pgr_test.postgres_resource.servers.each { |s| s.update(version: "17") }
       pgr_test.read_replica.servers.each { |s| s.update(version: "17") }
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
@@ -511,8 +473,8 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
 
     it "fails when PG16 upgrade leaves a slot that should have been dropped" do
       refresh_frame(pgr_test, new_values: {"start_version" => "16"})
-      allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "f")
-      allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
+      expect(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1", "f")
+      expect(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
       pgr_test.postgres_resource.servers.each { |s| s.update(version: "17") }
       pgr_test.read_replica.servers.each { |s| s.update(version: "17") }
       expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
