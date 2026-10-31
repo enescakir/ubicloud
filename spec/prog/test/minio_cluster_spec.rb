@@ -18,7 +18,7 @@ RSpec.describe Prog::Test::MinioCluster do
     let(:new_minio_service_id) { "22222222-2222-2222-2222-222222222222" }
 
     it "creates a strand and minio service project if it doesn't exist" do
-      allow(Config).to receive(:minio_service_project_id).and_return(new_minio_service_id)
+      expect(Config).to receive(:minio_service_project_id).and_return(new_minio_service_id).at_least(:once)
       st = described_class.assemble(project_id)
       expect(st).to be_a Strand
       expect(st.label).to eq("start")
