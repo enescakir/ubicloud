@@ -163,7 +163,7 @@ RSpec.describe Prog::Vnet::Gcp::SubnetNexus, :no_db_transaction do
     nx_destroyer = described_class.new(destroyer.strand)
     subnetworks = instance_double(Google::Cloud::Compute::V1::Subnetworks::Rest::Client)
     expect(subnetworks).to receive(:get).and_raise(Google::Cloud::NotFoundError.new("not found"))
-    allow(nx_destroyer.send(:credential)).to receive(:subnetworks_client).and_return(subnetworks)
+    expect(nx_destroyer.send(:credential)).to receive(:subnetworks_client).and_return(subnetworks)
 
     expect { nx_destroyer.finish_destroy }.to exit({"msg" => "subnet destroyed"})
     expect(gcp_vpc.destroy_set?).to be(false)
