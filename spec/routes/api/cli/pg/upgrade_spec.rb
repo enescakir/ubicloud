@@ -12,7 +12,6 @@ RSpec.describe Clover, "cli pg upgrade" do
 
   it "schedules upgrade from version 16 to 17" do
     expect(@pg.target_version).to eq "16"
-    allow(@pg).to receive(:needs_convergence?).and_return(false)
 
     expect(cli(%W[pg #{@ref} upgrade])).to eq "Scheduled major version upgrade of PostgreSQL database with id #{@pg.ubid} to version 17.\n"
 
