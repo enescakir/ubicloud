@@ -807,26 +807,21 @@ RSpec.describe Prog::Vnet::Gcp::SubnetNexus do
       expect(Semaphore.where(strand_id: gcp_vpc.id, name: "destroy").count).to eq(0)
     end
 
-    it "cleans up VPC via incr_destroy when last subnet destroyed" do
-      expect { nx.finish_destroy }.to exit({"msg" => "subnet destroyed"})
-      expect(ps.exists?).to be false
-      expect(Semaphore.where(strand_id: gcp_vpc.id, name: "destroy").count).to eq(1)
-    end
-
     it "does not add another destroy semaphore when one is already pending (last subnet out)" do
       gcp_vpc.incr_destroy
       expect { nx.finish_destroy }.to exit({"msg" => "subnet destroyed"})
       expect(Semaphore.where(strand_id: gcp_vpc.id, name: "destroy").count).to eq(1)
     end
 
-    it "loads the gcp_vpc with a FOR NO KEY UPDATE lock so concurrent teardowns serialize" do
+    it "cleans up VPC via incr_destroy when last subnet destroyed, loading the gcp_vpc with a FOR NO KEY UPDATE lock so concurrent teardowns serialize" do
       captured = nil
-      allow(nx.private_subnet).to receive(:gcp_vpc).and_wrap_original do |original, &block|
+      expect(nx.private_subnet).to receive(:gcp_vpc).and_wrap_original do |original, &block|
         captured = block
         original.call(&block)
       end
       expect { nx.finish_destroy }.to exit({"msg" => "subnet destroyed"})
       expect(captured.call(GcpVpc.dataset).sql).to include("FOR NO KEY UPDATE")
+      expect(ps.exists?).to be false
       expect(Semaphore.where(strand_id: gcp_vpc.id, name: "destroy").count).to eq(1)
     end
 
@@ -917,42 +912,24 @@ RSpec.describe Prog::Vnet::Gcp::SubnetNexus do
       expect(result).to be(false)
     end
 
-    it "matches when target_secure_tags are equal" do
-      tag = Google::Cloud::Compute::V1::FirewallPolicyRuleSecureTag.new(name: "tagValues/123")
+    it "matches only when target_secure_tags are equal" do
       all_proto = Google::Cloud::Compute::V1::FirewallPolicyRuleMatcherLayer4Config.new(ip_protocol: "all")
-      rule = Google::Cloud::Compute::V1::FirewallPolicyRule.new(
-        direction: "EGRESS", action: "allow",
-        match: Google::Cloud::Compute::V1::FirewallPolicyRuleMatcher.new(
-          dest_ip_ranges: ["10.0.0.0/26"],
+      results = ["tagValues/123", "tagValues/999"].map do |tag_name|
+        rule = Google::Cloud::Compute::V1::FirewallPolicyRule.new(
+          direction: "EGRESS", action: "allow",
+          match: Google::Cloud::Compute::V1::FirewallPolicyRuleMatcher.new(
+            dest_ip_ranges: ["10.0.0.0/26"],
+            layer4_configs: [all_proto],
+          ),
+          target_secure_tags: [Google::Cloud::Compute::V1::FirewallPolicyRuleSecureTag.new(name: tag_name)],
+        )
+        nx.send(:firewall_policy_rule_matches_desired?, rule,
+          direction: "EGRESS", action: "allow",
+          src_ip_ranges: nil, dest_ip_ranges: ["10.0.0.0/26"],
           layer4_configs: [all_proto],
-        ),
-        target_secure_tags: [tag],
-      )
-      result = nx.send(:firewall_policy_rule_matches_desired?, rule,
-        direction: "EGRESS", action: "allow",
-        src_ip_ranges: nil, dest_ip_ranges: ["10.0.0.0/26"],
-        layer4_configs: [all_proto],
-        target_secure_tags: ["tagValues/123"])
-      expect(result).to be(true)
-    end
-
-    it "returns false when target_secure_tags differ" do
-      tag = Google::Cloud::Compute::V1::FirewallPolicyRuleSecureTag.new(name: "tagValues/999")
-      all_proto = Google::Cloud::Compute::V1::FirewallPolicyRuleMatcherLayer4Config.new(ip_protocol: "all")
-      rule = Google::Cloud::Compute::V1::FirewallPolicyRule.new(
-        direction: "EGRESS", action: "allow",
-        match: Google::Cloud::Compute::V1::FirewallPolicyRuleMatcher.new(
-          dest_ip_ranges: ["10.0.0.0/26"],
-          layer4_configs: [all_proto],
-        ),
-        target_secure_tags: [tag],
-      )
-      result = nx.send(:firewall_policy_rule_matches_desired?, rule,
-        direction: "EGRESS", action: "allow",
-        src_ip_ranges: nil, dest_ip_ranges: ["10.0.0.0/26"],
-        layer4_configs: [all_proto],
-        target_secure_tags: ["tagValues/123"])
-      expect(result).to be(false)
+          target_secure_tags: ["tagValues/123"])
+      end
+      expect(results).to eq [true, false]
     end
 
     it "handles nil target_secure_tags on both sides" do
