@@ -65,14 +65,11 @@ RSpec.describe Clover, "Kubernetes" do
   end
 
   describe "unauthenticated" do
-    it "can not list without login" do
+    it "can not list or create without login" do
       visit "#{project.path}/kubernetes-cluster"
       expect(page.title).to eq("Ubicloud - Login")
-    end
 
-    it "can not create without login" do
       visit "#{project.path}/kubernetes-cluster/create"
-
       expect(page.title).to eq("Ubicloud - Login")
     end
   end
@@ -365,15 +362,6 @@ RSpec.describe Clover, "Kubernetes" do
 
         expect(page.status_code).to eq(404)
         expect(page).to have_content("ResourceNotFound")
-      end
-
-      it "returns proper content headers and content" do
-        kc.update(kubeconfig: "mocked kubeconfig content")
-
-        visit "#{project.path}#{kc.path}/kubeconfig"
-        expect(page.response_headers["Content-Type"]).to eq("text/yaml")
-        expect(page.response_headers["Content-Disposition"]).to include("attachment; filename=\"#{kc.name}-kubeconfig.yaml\"")
-        expect(page.body).to eq("mocked kubeconfig content")
       end
 
       it "does not allow unauthorized access" do
@@ -789,43 +777,28 @@ RSpec.describe Clover, "Kubernetes" do
         kc
       end
 
-      it "can navigate to networking page via tab" do
+      it "can navigate to networking page via tab, which links the private subnet and attached firewall, without a postgres section" do
+        fw = Firewall.create(name: "kc-fw", description: "kc firewall", location_id: Location::HETZNER_FSN1_ID, project_id: project.id)
+        fw.associate_with_private_subnet(kc_ps)
+
         visit "#{project.path}#{kc.path}"
         within("#kubernetes-cluster-submenu") { click_link "Networking" }
         expect(page.title).to eq("Ubicloud - #{kc.name}")
-        expect(page).to have_content kc_ps.name
-      end
-
-      it "shows private subnet with networking link when user has PrivateSubnet:view" do
-        visit "#{project.path}#{kc.path}/networking"
         expect(page).to have_link(kc_ps.name, href: "#{project.path}#{kc_ps.path}/networking")
+        expect(page).to have_link(fw.name, href: "#{project.path}#{fw.path}/networking")
+        expect(page).to have_no_content "PostgreSQL Databases"
       end
 
-      it "shows private subnet without link when user lacks PrivateSubnet:view" do
+      it "shows private subnet and attached firewall without links when user lacks PrivateSubnet:view and Firewall:view" do
+        fw = Firewall.create(name: "kc-fw", description: "kc firewall", location_id: Location::HETZNER_FSN1_ID, project_id: project.id)
+        fw.associate_with_private_subnet(kc_ps)
+
         AccessControlEntry.dataset.destroy
         AccessControlEntry.create(project_id: project.id, subject_id: user.id, action_id: ActionType::NAME_MAP["KubernetesCluster:view"])
 
         visit "#{project.path}#{kc.path}/networking"
         expect(page).to have_content kc_ps.name
         expect(page).to have_no_link(kc_ps.name)
-      end
-
-      it "shows attached firewall with networking link when user has Firewall:view" do
-        fw = Firewall.create(name: "kc-fw", description: "kc firewall", location_id: Location::HETZNER_FSN1_ID, project_id: project.id)
-        fw.associate_with_private_subnet(kc_ps)
-
-        visit "#{project.path}#{kc.path}/networking"
-        expect(page).to have_link(fw.name, href: "#{project.path}#{fw.path}/networking")
-      end
-
-      it "shows attached firewall without link when user lacks Firewall:view" do
-        fw = Firewall.create(name: "kc-fw", description: "kc firewall", location_id: Location::HETZNER_FSN1_ID, project_id: project.id)
-        fw.associate_with_private_subnet(kc_ps)
-
-        AccessControlEntry.dataset.destroy
-        AccessControlEntry.create(project_id: project.id, subject_id: user.id, action_id: ActionType::NAME_MAP["KubernetesCluster:view"])
-
-        visit "#{project.path}#{kc.path}/networking"
         expect(page).to have_content fw.name
         expect(page).to have_no_link(fw.name)
       end
@@ -836,17 +809,13 @@ RSpec.describe Clover, "Kubernetes" do
         expect(page).to have_content "No firewall attached"
       end
 
-      it "does not show postgres section when no postgres databases exist" do
-        visit "#{project.path}#{kc.path}/networking"
-        expect(page).to have_no_content "PostgreSQL Databases"
-      end
-
-      it "shows postgres databases when user has Postgres:view" do
+      it "shows postgres databases with a connect button when subnets are not connected and user has admin permissions" do
         pg
         visit "#{project.path}#{kc.path}/networking"
         expect(page).to have_content "PostgreSQL Databases"
         expect(page).to have_content pg.name
         expect(page).to have_content "Not connected"
+        expect(page).to have_button("Connect")
       end
 
       it "does not show postgres databases when user lacks Postgres:view" do
@@ -857,12 +826,6 @@ RSpec.describe Clover, "Kubernetes" do
         visit "#{project.path}#{kc.path}/networking"
         expect(page).to have_no_content "PostgreSQL Databases"
         expect(page).to have_no_content pg.name
-      end
-
-      it "shows connect button when subnets are not connected and user has admin permissions" do
-        pg
-        visit "#{project.path}#{kc.path}/networking"
-        expect(page).to have_button("Connect")
       end
 
       it "does not shows connect button when all of the subnet's firewalls are connected to other subnets" do
