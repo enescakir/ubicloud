@@ -308,6 +308,8 @@ RSpec.describe Project do
     expect(project.effective_quota_value("VmVCpu")).to eq 32
     expect(project.effective_quota_value("GithubRunnerVCpu")).to eq 1000
     expect(project.effective_quota_value("GithubRunnerVCpuArm")).to eq 100
+    expect(project.effective_quota_value("GithubRunnerVCpuAws")).to eq 128
+    expect(project.effective_quota_value("GithubRunnerVCpuArmAws")).to eq 128
     expect(project.effective_quota_value("PostgresVCpu")).to eq 128
 
     project.reputation = "verified"
@@ -321,8 +323,8 @@ RSpec.describe Project do
     expect(project.effective_quota_value("VmVCpu")).to eq 16
     expect(project.effective_quota_value("GithubRunnerVCpu")).to eq 128
     expect(project.effective_quota_value("GithubRunnerVCpuArm")).to eq 50
-    expect(project.effective_quota_value("GithubRunnerVCpuAws")).to eq 0
-    expect(project.effective_quota_value("GithubRunnerVCpuArmAws")).to eq 0
+    expect(project.effective_quota_value("GithubRunnerVCpuAws")).to eq 16
+    expect(project.effective_quota_value("GithubRunnerVCpuArmAws")).to eq 16
     expect(project.effective_quota_value("PostgresVCpu")).to eq 16
 
     project.reputation = "verified"
