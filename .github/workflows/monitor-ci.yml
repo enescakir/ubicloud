@@ -19,7 +19,7 @@ on:
       - 'lib/metrics_target_resource.rb'
       - 'spec/monitor_smoke_test.rb'
       - '.github/workflows/monitor-ci.yml'
-      - '.github/actions/setup-clover/action.yml'
+      - '.github/actions/setup-clover/**'
   pull_request:
     paths:
       - '.tool-versions'
@@ -32,7 +32,7 @@ on:
       - 'lib/metrics_target_resource.rb'
       - 'spec/monitor_smoke_test.rb'
       - '.github/workflows/monitor-ci.yml'
-      - '.github/actions/setup-clover/action.yml'
+      - '.github/actions/setup-clover/**'
 
 jobs:
   cli-ci:

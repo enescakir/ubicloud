@@ -14,7 +14,7 @@ on:
       - 'bin/ubi'
       - 'spec/cli_spec.rb'
       - '.github/workflows/cli-ci.yml'
-      - '.github/actions/setup-clover/action.yml'
+      - '.github/actions/setup-clover/**'
   pull_request:
     paths:
       - '.tool-versions'
@@ -22,7 +22,7 @@ on:
       - 'bin/ubi'
       - 'spec/cli_spec.rb'
       - '.github/workflows/cli-ci.yml'
-      - '.github/actions/setup-clover/action.yml'
+      - '.github/actions/setup-clover/**'
 
 jobs:
   cli-ci:

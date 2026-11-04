@@ -16,7 +16,7 @@ on:
       - 'prog/test.rb'
       - 'spec/respirate_smoke_test.rb'
       - '.github/workflows/respirate-ci.yml'
-      - '.github/actions/setup-clover/action.yml'
+      - '.github/actions/setup-clover/**'
   pull_request:
     paths:
       - '.tool-versions'
@@ -26,7 +26,7 @@ on:
       - 'prog/test.rb'
       - 'spec/respirate_smoke_test.rb'
       - '.github/workflows/respirate-ci.yml'
-      - '.github/actions/setup-clover/action.yml'
+      - '.github/actions/setup-clover/**'
 
 jobs:
   cli-ci:
