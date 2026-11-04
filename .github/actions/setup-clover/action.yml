@@ -13,7 +13,7 @@ runs:
     - name: Start PostgreSQL setup in the background
       shell: bash
       run: |
-        (PS4='+ $(date +%T.%3N) ' "$GITHUB_ACTION_PATH/setup-postgres.sh" > "$RUNNER_TEMP/setup-postgres.log" 2>&1; echo $? > "$RUNNER_TEMP/setup-postgres.status") &
+        (PS4='+ $(date +%T.%3N) ' "$GITHUB_ACTION_PATH/setup-postgres.sh"; echo $? > "$RUNNER_TEMP/setup-postgres.status") > "$RUNNER_TEMP/setup-postgres.log" 2>&1 < /dev/null &
 
     - name: Set up Ruby
       uses: ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # v1.334.0
@@ -40,7 +40,7 @@ runs:
     - name: Wait for PostgreSQL setup
       shell: bash
       run: |
-        until [ -f "$RUNNER_TEMP/setup-postgres.status" ]; do sleep 1; done
+        until [ -f "$RUNNER_TEMP/setup-postgres.status" ]; do sleep 0.2; done
         cat "$RUNNER_TEMP/setup-postgres.log"
         exit "$(cat "$RUNNER_TEMP/setup-postgres.status")"
 
