@@ -15,8 +15,7 @@ sudo apt-get update "${apt_options[@]}"
 # dpkg and initdb
 echo "initdb_options = '--no-sync'" | sudo tee -a /etc/postgresql-common/createcluster.conf > /dev/null
 sudo NEEDRESTART_SUSPEND=1 apt-get install -y "${apt_options[@]}" -o Dpkg::Options::=--force-unsafe-io postgresql-17 postgresql-client-17
-# Allow runner user to access PostgreSQL. Keep postgres user access for the
-# startup check of pg_ctlcluster, which retries for seconds when it fails.
+# Allow runner and postgres users to access PostgreSQL
 echo 'runner_map postgres postgres
 runner_map runner postgres
 runner_map runner clover
@@ -25,5 +24,9 @@ sudo sed -i '1i local   all   all   peer map=runner_map' /etc/postgresql/17/main
 echo 'fsync = off
 synchronous_commit = off
 full_page_writes = off' | sudo tee /etc/postgresql/17/main/conf.d/ci.conf > /dev/null
-sudo systemctl restart postgresql
-until pg_isready -q; do sleep 1; done
+# Start the server with pg_ctl. The startup check of pg_ctlcluster sleeps
+# for at least 2 seconds.
+sudo -u postgres /usr/lib/postgresql/17/bin/pg_ctl start -w -s \
+  -D /var/lib/postgresql/17/main \
+  -l /var/log/postgresql/postgresql-17-main.log \
+  -o "-c config_file=/etc/postgresql/17/main/postgresql.conf"
