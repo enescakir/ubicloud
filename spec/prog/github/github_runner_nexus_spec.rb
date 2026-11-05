@@ -33,6 +33,12 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
     allow(Time).to receive(:now).and_return(now)
   end
 
+  def create_aws_vm(**)
+    location = Location.create(name: "eu-central-1", provider: "aws", project_id: vm.project_id, display_name: "aws-eu-central-1", ui_name: "AWS Frankfurt", visible: true)
+    allow(Config).to receive(:github_runner_aws_location_id).and_return(location.id)
+    create_vm(name: "aws-vm", location_id: location.id, project_id: vm.project_id, **)
+  end
+
   describe ".assemble" do
     it "creates github runner and vm with sshable" do
       runner = described_class.assemble(installation, repository_name: "test-repo", label: "ubicloud").subject
@@ -638,7 +644,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
         project.set_ff_spill_to_alien_runners(true)
         runner.update(created_at: now - 40)
         expect(Config).to receive(:github_runner_aws_spill_vcpu_capacity).and_return(10)
-        create_vm(vcpus: 16, boot_image: Config.github_ubuntu_2204_x64_aws_ami_version)
+        create_aws_vm(vcpus: 16)
 
         expect { nx.wait_concurrency_limit }.to nap
         expect(runner.spill_over_set?).to be(false)
@@ -650,7 +656,7 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
         project.set_ff_spill_to_alien_runners(true)
         runner.update(created_at: now - 40)
         expect(Config).to receive(:github_runner_aws_spill_runner_capacity).and_return(1)
-        create_vm(vcpus: 2, boot_image: Config.github_ubuntu_2204_x64_aws_ami_version)
+        create_aws_vm(vcpus: 2)
 
         expect { nx.wait_concurrency_limit }.to nap
         expect(runner.spill_over_set?).to be(false)
@@ -994,14 +1000,14 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
 
       it "does not spill over if the spill vcpus limit is exceeded" do
         expect(Config).to receive(:github_runner_aws_spill_vcpu_capacity).and_return(10)
-        create_vm(vcpus: 16, boot_image: Config.github_ubuntu_2204_x64_aws_ami_version)
+        create_aws_vm(vcpus: 16)
         expect { nx.wait_vm }.to nap(10)
         expect(runner.spill_over_set?).to be(false)
       end
 
       it "does not spill over if the spill runner limit is exceeded" do
         expect(Config).to receive(:github_runner_aws_spill_runner_capacity).and_return(1)
-        create_vm(vcpus: 2, boot_image: Config.github_ubuntu_2204_x64_aws_ami_version)
+        create_aws_vm(vcpus: 2)
         expect { nx.wait_vm }.to nap(10)
         expect(runner.spill_over_set?).to be(false)
       end
