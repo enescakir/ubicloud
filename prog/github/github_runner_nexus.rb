@@ -608,9 +608,16 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     COMMAND
 
     private_ipv4 = vm.private_ipv4
-    if installation.cache_enabled
-      command << NetSsh.command(<<~COMMAND, private_ipv4:)
+    command << if installation.cache_enabled
+      NetSsh.command(<<~COMMAND, private_ipv4:)
         echo "CUSTOM_ACTIONS_CACHE_URL=http://":private_ipv4":51123/random_token/" | sudo tee -a /etc/environment > /dev/null
+      COMMAND
+    else
+      # Our runner fork hides ACTIONS_CACHE_SERVICE_V2 from actions, so they
+      # use cache service v1, the only version our cache proxy supports.
+      # GitHub sunset v1, so actions need v2 when the proxy is not in use.
+      NetSsh.command(<<~COMMAND)
+        echo "ACTIONS_CACHE_SERVICE_V2=true" | sudo tee -a /etc/environment > /dev/null
       COMMAND
     end
 
