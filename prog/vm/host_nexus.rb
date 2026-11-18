@@ -139,6 +139,7 @@ class Prog::Vm::HostNexus < Prog::Base
         total_cpus = st.exitval.fetch("total_cpus")
         cpu_numa_nodes = st.exitval.fetch("cpu_numa_nodes")
         cpu_cores = st.exitval.fetch("cpu_cores")
+        cpu_cppc_highest_perfs = st.exitval.fetch("cpu_cppc_highest_perfs")
         kwargs = {
           arch:,
           total_sockets: st.exitval.fetch("total_sockets"),
@@ -149,9 +150,9 @@ class Prog::Vm::HostNexus < Prog::Base
         vm_host.update(**kwargs)
         io_cores = vm_host.io_cpu_count * total_cores / total_cpus
         cpu_rows = (0..total_cpus - 1).map do |cpu|
-          [vm_host.id, cpu, cpu_cores[cpu] < io_cores, cpu_numa_nodes[cpu], cpu_cores[cpu]]
+          [vm_host.id, cpu, cpu_cores[cpu] < io_cores, cpu_numa_nodes[cpu], cpu_cores[cpu], cpu_cppc_highest_perfs[cpu]]
         end
-        VmHostCpu.import([:vm_host_id, :cpu_number, :io, :numa_node, :core_number], cpu_rows)
+        VmHostCpu.import([:vm_host_id, :cpu_number, :io, :numa_node, :core_number, :cppc_highest_perf], cpu_rows)
         vm_host.update(used_cores: io_cores)
       end
     end

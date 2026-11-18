@@ -181,23 +181,44 @@ JSON
     end
   end
 
+  describe "#get_cppc_highest_perfs" do
+    let(:cppc_cmd) { "grep -s . /sys/devices/system/cpu/cpu*/acpi_cppc/highest_perf || true" }
+
+    it "returns the value of each cpu in cpu order, whatever the order of the files" do
+      expect(lc.sshable).to receive(:_cmd).with(cppc_cmd).and_return(<<OUT)
+/sys/devices/system/cpu/cpu0/acpi_cppc/highest_perf:191
+/sys/devices/system/cpu/cpu1/acpi_cppc/highest_perf:196
+/sys/devices/system/cpu/cpu10/acpi_cppc/highest_perf:221
+/sys/devices/system/cpu/cpu11/acpi_cppc/highest_perf:236
+/sys/devices/system/cpu/cpu2/acpi_cppc/highest_perf:181
+OUT
+      expect(lc.get_cppc_highest_perfs(total_cpus: 12)).to eq([191, 196, 181, nil, nil, nil, nil, nil, nil, nil, 221, 236])
+    end
+
+    it "returns nil for each cpu of a host without ACPI CPPC" do
+      expect(lc.sshable).to receive(:_cmd).with(cppc_cmd).and_return("")
+      expect(lc.get_cppc_highest_perfs(total_cpus: 2)).to eq([nil, nil])
+    end
+  end
+
   describe "#start" do
     def expect_cpu_commands(sshable)
       expect(sshable).to receive(:_cmd).with("common/bin/arch").and_return("x64")
       expect(sshable).to receive(:_cmd).with("/usr/bin/lscpu -Jye").and_return(eight_thread_four_core_four_numa_two_socket)
       expect(sshable).to receive(:_cmd).with("cat /sys/devices/system/cpu/cpu*/topology/die_id").and_return("0\n1\n0\n1\n")
+      expect(sshable).to receive(:_cmd).with("grep -s . /sys/devices/system/cpu/cpu*/acpi_cppc/highest_perf || true").and_return((0..7).map { "/sys/devices/system/cpu/cpu#{it}/acpi_cppc/highest_perf:#{166 + it / 2}\n" }.join)
     end
 
     it "pops with cpu info" do
       expect_cpu_commands(lc.sshable)
-      expect { lc.start }.to exit("arch" => "x64", "total_cpus" => 8, "total_cores" => 4, "total_dies" => 2, "total_sockets" => 2, "cpu_numa_nodes" => [0, 0, 1, 1, 2, 2, 3, 3], "cpu_cores" => [0, 0, 1, 1, 2, 2, 3, 3])
+      expect { lc.start }.to exit("arch" => "x64", "total_cpus" => 8, "total_cores" => 4, "total_dies" => 2, "total_sockets" => 2, "cpu_numa_nodes" => [0, 0, 1, 1, 2, 2, 3, 3], "cpu_cores" => [0, 0, 1, 1, 2, 2, 3, 3], "cpu_cppc_highest_perfs" => [166, 166, 167, 167, 168, 168, 169, 169])
     end
 
     it "returns string keys to a pushing prog, so it can read retval right away" do
       pushed = described_class.new(Strand.create_with_id(sshable, prog: "LearnCpu", label: "start", stack: [{"subject_id" => sshable.id, "link" => ["LearnCpuTopology", "start"]}, {}]))
       expect_cpu_commands(pushed.sshable)
       expect { pushed.start }.to hop("start", "LearnCpuTopology") { |hop|
-        expect(hop.strand_update_args[:retval]).to eq("arch" => "x64", "total_cpus" => 8, "total_cores" => 4, "total_dies" => 2, "total_sockets" => 2, "cpu_numa_nodes" => [0, 0, 1, 1, 2, 2, 3, 3], "cpu_cores" => [0, 0, 1, 1, 2, 2, 3, 3])
+        expect(hop.strand_update_args[:retval]).to eq("arch" => "x64", "total_cpus" => 8, "total_cores" => 4, "total_dies" => 2, "total_sockets" => 2, "cpu_numa_nodes" => [0, 0, 1, 1, 2, 2, 3, 3], "cpu_cores" => [0, 0, 1, 1, 2, 2, 3, 3], "cpu_cppc_highest_perfs" => [166, 166, 167, 167, 168, 168, 169, 169])
       }
     end
   end

@@ -35,10 +35,18 @@ class Prog::LearnCpu < Prog::Base
     die_ids.uniq.count
   end
 
+  # A host without ACPI CPPC has no such files, and its cpus get nil.
+  def get_cppc_highest_perfs(total_cpus:)
+    out = sshable.cmd("grep -s . /sys/devices/system/cpu/cpu*/acpi_cppc/highest_perf || true")
+    perf_by_cpu = out.scan(%r{/cpu(\d+)/acpi_cppc/highest_perf:(\d+)}).to_h { |cpu, perf| [cpu.to_i, perf.to_i] }
+    Array.new(total_cpus) { perf_by_cpu[it] }
+  end
+
   label def start
     arch = get_arch
     topo = get_topology
     total_dies = count_dies(total_sockets: topo[:total_sockets], arch:)
-    pop({arch:, **topo, total_dies:}.transform_keys(&:to_s))
+    cpu_cppc_highest_perfs = get_cppc_highest_perfs(total_cpus: topo[:total_cpus])
+    pop({arch:, **topo, total_dies:, cpu_cppc_highest_perfs:}.transform_keys(&:to_s))
   end
 end

@@ -520,7 +520,7 @@ RSpec.describe Prog::Vm::HostNexus do
     it "updates the vm_host record from the finished programs" do
       Strand.create(parent_id: st.id, prog: "LearnMemory", label: "start", exitval: {"mem_gib" => 1})
       Strand.create(parent_id: st.id, prog: "LearnOs", label: "start", exitval: {"os_version" => "ubuntu-24.04"})
-      Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", exitval: {"arch" => "arm64", "total_sockets" => 2, "total_dies" => 3, "total_cores" => 4, "total_cpus" => 5, "cpu_numa_nodes" => [0, 0, 1, 1, nil], "cpu_cores" => [0, 1, 2, 3, 0]})
+      Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", exitval: {"arch" => "arm64", "total_sockets" => 2, "total_dies" => 3, "total_cores" => 4, "total_cpus" => 5, "cpu_numa_nodes" => [0, 0, 1, 1, nil], "cpu_cores" => [0, 1, 2, 3, 0], "cpu_cppc_highest_perfs" => [166, 201, 236, nil, 166]})
       Strand.create(parent_id: st.id, prog: "ArbitraryOtherProg", label: "start", exitval: {})
 
       expect { nx.wait_prep }.to hop("setup_hugepages")
@@ -533,12 +533,12 @@ RSpec.describe Prog::Vm::HostNexus do
       expect(vm_host.total_cpus).to eq 5
       expect(vm_host.total_dies).to eq 3
       expect(vm_host.total_sockets).to eq 2
-      expect(VmHostCpu.where(vm_host_id: vm_host.id).select_order_map([:cpu_number, :io, :numa_node, :core_number])).to eq [[0, true, 0, 0], [1, false, 0, 1], [2, false, 1, 2], [3, false, 1, 3], [4, true, nil, 0]]
+      expect(VmHostCpu.where(vm_host_id: vm_host.id).select_order_map([:cpu_number, :io, :numa_node, :core_number, :cppc_highest_perf])).to eq [[0, true, 0, 0, 166], [1, false, 0, 1, 201], [2, false, 1, 2, 236], [3, false, 1, 3, nil], [4, true, nil, 0, 166]]
       expect(vm_host.used_cores).to eq 1
     end
 
     it "makes the io cpus whole cores when a core's hyperthreads are not numbered next to each other" do
-      Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", exitval: {"arch" => "x64", "total_sockets" => 1, "total_dies" => 1, "total_cores" => 4, "total_cpus" => 8, "cpu_numa_nodes" => [0] * 8, "cpu_cores" => [0, 1, 2, 3, 0, 1, 2, 3]})
+      Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", exitval: {"arch" => "x64", "total_sockets" => 1, "total_dies" => 1, "total_cores" => 4, "total_cpus" => 8, "cpu_numa_nodes" => [0] * 8, "cpu_cores" => [0, 1, 2, 3, 0, 1, 2, 3], "cpu_cppc_highest_perfs" => [nil] * 8})
 
       expect { nx.wait_prep }.to hop("setup_hugepages")
 
