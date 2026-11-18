@@ -9,12 +9,13 @@ end
 # Table: vm_host_cpu
 # Primary Key: (vm_host_id, cpu_number)
 # Columns:
-#  vm_host_id       | uuid    |
-#  cpu_number       | integer |
-#  vm_host_slice_id | uuid    |
-#  numa_node        | integer |
-#  io               | boolean | NOT NULL
-#  core_number      | integer |
+#  vm_host_id        | uuid    |
+#  cpu_number        | integer |
+#  vm_host_slice_id  | uuid    |
+#  numa_node         | integer |
+#  io                | boolean | NOT NULL
+#  core_number       | integer |
+#  cppc_highest_perf | integer |
 # Indexes:
 #  vm_host_cpu_pkey                   | PRIMARY KEY btree (vm_host_id, cpu_number)
 #  vm_host_cpu_vm_host_slice_id_index | btree (vm_host_slice_id)
