@@ -379,6 +379,14 @@ RSpec.describe Prog::Vm::HostNexus do
     end
   end
 
+  describe "#configure_cpu_governor" do
+    it "pushes the setup program, returning to wait" do
+      expect { nx.configure_cpu_governor }.to hop("start", "SetupCpuGovernor") { |hop|
+        expect(hop.strand_update_args[:stack].first).to include("link" => ["Vm::HostNexus", "wait"])
+      }
+    end
+  end
+
   describe "#enable_csum_guard" do
     it "pushes the setup program to install the guard" do
       expect { nx.enable_csum_guard }.to hop("start", "SetupCsumGuard") { |hop|
@@ -664,6 +672,12 @@ RSpec.describe Prog::Vm::HostNexus do
       nx.incr_configure_storage_trim
       expect { nx.wait }.to hop("configure_storage_trim")
       expect(vm_host.configure_storage_trim_set?).to be false
+    end
+
+    it "hops to configure_cpu_governor when needed" do
+      nx.incr_configure_cpu_governor
+      expect { nx.wait }.to hop("configure_cpu_governor")
+      expect(vm_host.configure_cpu_governor_set?).to be false
     end
 
     it "hops to enable_csum_guard when needed" do

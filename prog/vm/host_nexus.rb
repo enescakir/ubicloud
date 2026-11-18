@@ -418,6 +418,11 @@ TIMER
       hop_configure_storage_trim
     end
 
+    when_configure_cpu_governor_set? do
+      decr_configure_cpu_governor
+      hop_configure_cpu_governor
+    end
+
     when_enable_csum_guard_set? do
       hop_enable_csum_guard
     end
@@ -457,6 +462,10 @@ TIMER
 
   label def configure_storage_trim
     hop_push :wait, Prog::SetupStorageTrim
+  end
+
+  label def configure_cpu_governor
+    hop_push :wait, Prog::SetupCpuGovernor
   end
 
   # Decremented even when the setup paged, so a rollout moves past a
