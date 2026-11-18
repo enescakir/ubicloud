@@ -379,6 +379,14 @@ RSpec.describe Prog::Vm::HostNexus do
     end
   end
 
+  describe "#configure_irq_affinity" do
+    it "pushes the setup program, returning to wait" do
+      expect { nx.configure_irq_affinity }.to hop("start", "SetupIrqAffinity") { |hop|
+        expect(hop.strand_update_args[:stack].first).to include("link" => ["Vm::HostNexus", "wait"])
+      }
+    end
+  end
+
   describe "#enable_csum_guard" do
     it "pushes the setup program to install the guard" do
       expect { nx.enable_csum_guard }.to hop("start", "SetupCsumGuard") { |hop|
@@ -669,6 +677,12 @@ RSpec.describe Prog::Vm::HostNexus do
       nx.incr_configure_storage_trim
       expect { nx.wait }.to hop("configure_storage_trim")
       expect(vm_host.configure_storage_trim_set?).to be false
+    end
+
+    it "hops to configure_irq_affinity when needed" do
+      nx.incr_configure_irq_affinity
+      expect { nx.wait }.to hop("configure_irq_affinity")
+      expect(vm_host.configure_irq_affinity_set?).to be false
     end
 
     it "hops to enable_csum_guard when needed" do
