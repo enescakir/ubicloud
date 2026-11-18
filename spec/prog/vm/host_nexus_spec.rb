@@ -474,6 +474,7 @@ RSpec.describe Prog::Vm::HostNexus do
         "LearnOs",
         "LearnPci",
         "LearnStorage",
+        "SetupCpuGovernor",
         "SetupCsumGuard",
         "SetupNftables",
         "SetupNodeExporter",
