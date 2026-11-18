@@ -19,6 +19,19 @@ require_relative "csum_guard_setup"
 class VmSetup
   Nic = Struct.new(:net6, :net4, :tap, :mac, :private_ipv4_gateway)
 
+  # Ruby code that gives its process a new core scheduling cookie, with
+  # prctl(PR_SCHED_CORE, PR_SCHED_CORE_CREATE, 0,
+  # PR_SCHED_CORE_SCOPE_THREAD_GROUP, 0), and then runs the command in its
+  # arguments. The command keeps the cookie and its threads inherit it. A
+  # kernel without core scheduling (EINVAL) and a host without SMT (ENODEV)
+  # have no cores to share, as in Cloud Hypervisor.
+  CORE_SCHED_EXEC = <<~'RUBY'.split("\n").join("; ").freeze
+    prctl = Fiddle::Function.new(Fiddle.dlopen(nil)["prctl"], [Fiddle::TYPE_INT] + [Fiddle::TYPE_LONG] * 4, Fiddle::TYPE_INT)
+    failed = prctl.call(62, 1, 0, 1, 0) != 0 && ![Errno::EINVAL::Errno, Errno::ENODEV::Errno].include?(Fiddle.last_error)
+    abort "PR_SCHED_CORE_CREATE failed with errno #{Fiddle.last_error}" if failed
+    exec(*ARGV)
+  RUBY
+
   def initialize(vm_name, hugepages: true, hypervisor: "ch", ch_version: nil, firmware_version: nil, append_serial_console: false)
     @vm_name = vm_name
     @hugepages = hugepages
@@ -847,13 +860,22 @@ DNSMASQ_SERVICE
       ["--console off --serial file=#{vp.serial_log}", ""]
     end
 
+    # Cloud Hypervisor 52 and later give a core scheduling cookie to the
+    # vCPU threads only. The virtio threads of the VM then cannot run on
+    # the sibling thread of a busy vCPU, and with whole cores per VM they
+    # have no other cpu, so I/O stalls the vCPUs. One cookie for the whole
+    # process lets the threads of a VM share its cores and still keeps
+    # every other process off them.
+    core_scheduling = Gem::Version.new(@ch_version.version) >= Gem::Version.new("52")
+
     exec_start_cmd = [
+      ("/usr/bin/ruby -rfiddle -e '#{CORE_SCHED_EXEC}'" if core_scheduling),
       "#{@ch_version.bin} -v",
       "--api-socket path=#{vp.ch_api_sock}",
       "--kernel #{@firmware_version.path}",
       disk_args,
       serial_arg,
-      "--cpus boot=#{max_vcpus},topology=#{cpu_topology}",
+      "--cpus boot=#{max_vcpus},topology=#{cpu_topology}#{",core_scheduling=off" if core_scheduling}",
       "--memory size=#{mem_gib}G,#{@hugepages ? "hugepages=on,hugepage_size=1G" : "shared=on"}",
       net_params.join(" "),
       pci_device_params,

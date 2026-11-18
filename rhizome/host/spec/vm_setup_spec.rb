@@ -444,6 +444,7 @@ RSpec.describe VmSetup do
         expect(content).not_to include("StandardOutput=")
 
         expect(content).to include("ExecStart=/opt/cloud-hypervisor/v35.1/cloud-hypervisor -v")
+        expect(content).not_to include("core_scheduling")
         %w[
           --api-socket path=/tmp/ch.sock \
           --kernel /opt/fw/CLOUDHV-202311.fd \
@@ -464,6 +465,33 @@ RSpec.describe VmSetup do
         expect(content).not_to include("Requires=test-1-storage.service")
         expect(content).to include("After=test-2-storage.service")
         expect(content).to include("Requires=test-2-storage.service")
+      }
+    end
+
+    it "starts cloud-hypervisor 52 and later with one core scheduling cookie for the process" do
+      vps = instance_spy(VmPath,
+        ch_api_sock: "/tmp/ch.sock",
+        serial_log: "/vm/test/serial.log",
+        cloudinit_img: "/vm/test/cloudinit.img")
+      expect(vs).to receive(:vp).and_return(vps).at_least(:once)
+
+      vs.instance_variable_set(:@ch_version,
+        CloudHypervisor::Version.new("52.0", "sha256_ch_bin", "sha256_ch_remote"))
+
+      vs.instance_variable_set(:@firmware_version,
+        CloudHypervisor::Firmware.new("202311", "sha256"))
+
+      expect(vs).to receive(:_run_command).with("systemctl daemon-reload")
+      vs.send(:install_systemd_unit, *args)
+
+      code = <<~'RUBY'.chomp
+        prctl = Fiddle::Function.new(Fiddle.dlopen(nil)["prctl"], [Fiddle::TYPE_INT] + [Fiddle::TYPE_LONG] * 4, Fiddle::TYPE_INT); failed = prctl.call(62, 1, 0, 1, 0) != 0 && ![Errno::EINVAL::Errno, Errno::ENODEV::Errno].include?(Fiddle.last_error); abort "PR_SCHED_CORE_CREATE failed with errno #{Fiddle.last_error}" if failed; exec(*ARGV)
+      RUBY
+      expect { RubyVM::InstructionSequence.compile(code) }.not_to raise_error
+
+      expect(vps).to have_received(:write_systemd_service) { |content|
+        expect(content).to include("ExecStart=/usr/bin/ruby -rfiddle -e '#{code}' \\\n/opt/cloud-hypervisor/v52.0/cloud-hypervisor -v \\\n")
+        expect(content).to include("--cpus boot=2,topology=1:1:1:2,core_scheduling=off \\\n")
       }
     end
 
