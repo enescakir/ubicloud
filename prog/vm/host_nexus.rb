@@ -156,7 +156,12 @@ class Prog::Vm::HostNexus < Prog::Base
       end
     end
 
-    reap(:setup_hugepages, reaper:)
+    reap(:setup_irq_affinity, reaper:)
+  end
+
+  # Runs after wait_prep, which creates the vm_host_cpu rows it reads.
+  label def setup_irq_affinity
+    hop_push :setup_hugepages, Prog::SetupIrqAffinity
   end
 
   label def setup_hugepages

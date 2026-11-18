@@ -523,7 +523,7 @@ RSpec.describe Prog::Vm::HostNexus do
       Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", exitval: {"arch" => "arm64", "total_sockets" => 2, "total_dies" => 3, "total_cores" => 4, "total_cpus" => 5, "cpu_numa_nodes" => [0, 0, 1, 1, nil], "cpu_cores" => [0, 1, 2, 3, 0]})
       Strand.create(parent_id: st.id, prog: "ArbitraryOtherProg", label: "start", exitval: {})
 
-      expect { nx.wait_prep }.to hop("setup_hugepages")
+      expect { nx.wait_prep }.to hop("setup_irq_affinity")
 
       vm_host.reload
       expect(vm_host.total_mem_gib).to eq 1
@@ -540,7 +540,7 @@ RSpec.describe Prog::Vm::HostNexus do
     it "makes the io cpus whole cores when a core's hyperthreads are not numbered next to each other" do
       Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", exitval: {"arch" => "x64", "total_sockets" => 1, "total_dies" => 1, "total_cores" => 4, "total_cpus" => 8, "cpu_numa_nodes" => [0] * 8, "cpu_cores" => [0, 1, 2, 3, 0, 1, 2, 3]})
 
-      expect { nx.wait_prep }.to hop("setup_hugepages")
+      expect { nx.wait_prep }.to hop("setup_irq_affinity")
 
       expect(VmHostCpu.where(vm_host_id: vm_host.id, io: true).select_order_map(:cpu_number)).to eq [0, 4]
       expect(vm_host.reload.used_cores).to eq 1
@@ -559,6 +559,12 @@ RSpec.describe Prog::Vm::HostNexus do
     it "donates to children if they are not exited yet" do
       Strand.create(parent_id: st.id, prog: "LearnCpu", label: "start", lease: Time.now + 10)
       expect { nx.wait_prep }.to nap(120)
+    end
+  end
+
+  describe "#setup_irq_affinity" do
+    it "pushes the irq affinity program, returning to setup_hugepages" do
+      expect { nx.setup_irq_affinity }.to hop("start", "SetupIrqAffinity") { it.strand_update_args[:stack].first["link"] == ["Vm::HostNexus", "setup_hugepages"] }
     end
   end
 
