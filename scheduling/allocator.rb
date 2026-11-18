@@ -679,8 +679,9 @@ module Scheduling::Allocator
     end
 
     def lock_cpuset(ds, n)
-      # Ordering by core takes the cpus of a core together.
-      ds.order_by(:numa_node, :core_number, :cpu_number).limit(n).for_update.skip_locked.select_map(:cpu_number)
+      # Ordering by core takes the cpus of a core together. The cores that
+      # the firmware prefers come first.
+      ds.order_by(:numa_node, Sequel.desc(:cppc_highest_perf, nulls: :last), :core_number, :cpu_number).limit(n).for_update.skip_locked.select_map(:cpu_number)
     end
 
     def select_existing_slice

@@ -1947,6 +1947,12 @@ RSpec.describe Scheduling::Allocator do
         expect(al.select_cpuset(vh.id, 4, threads_per_core: 2)).to eq([2, 10, 3, 11])
       end
 
+      it "select_cpuset picks the cores with the highest CPPC performance first, and cores without a value last" do
+        VmHostCpu.where(vm_host_id: vh.id, core_number: [5, 6]).update(cppc_highest_perf: 236)
+        VmHostCpu.where(vm_host_id: vh.id, core_number: 4).update(cppc_highest_perf: 201)
+        expect(al.select_cpuset(vh.id, 8, threads_per_core: 2)).to eq([5, 13, 6, 14, 4, 12, 2, 10])
+      end
+
       it "select_cpuset skips cores that a slice already uses" do
         Prog::Vm::VmHostSliceNexus.assemble_with_host("sl1", vh, family: "standard", allowed_cpus: [2], memory_gib: 4)
         expect(al.select_cpuset(vh.id, 2, threads_per_core: 2)).to eq([3, 11])
