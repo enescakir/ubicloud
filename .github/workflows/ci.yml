@@ -1,131 +1,100 @@
 name: CI
 
+on:
+  workflow_dispatch:
+    inputs:
+      size_mb:
+        default: "1024"
+
 permissions:
   contents: read
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
+env:
+  SIZE_MB: ${{ inputs.size_mb || '1024' }}
 
 jobs:
-  ruby-checks:
+  seed:
+    strategy:
+      matrix:
+        arch: [x64, arm]
+    runs-on: ${{ matrix.arch == 'arm' && 'ubicloud-standard-4-arm' || 'ubicloud-standard-4' }}
+    timeout-minutes: 30
+    env:
+      KEY: speedtest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+    steps:
+      - name: Runner info
+        run: |
+          date -u +%FT%TZ
+          jq -c '.[-1]' /home/runner/actions-runner/.setup_info || true
+          echo "ipv4=$(curl -4 -sS --max-time 5 https://ifconfig.me || echo none) ipv6=$(curl -6 -sS --max-time 5 https://ifconfig.me || echo none)"
+      - name: Make blob
+        run: mkdir -p blob && head -c "${SIZE_MB}M" /dev/urandom > blob/data.bin && ls -l blob
+      - name: Save
+        uses: actions/cache/save@v4
+        with:
+          path: blob
+          key: ${{ env.KEY }}
+
+  restore:
+    needs: seed
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [ubicloud-standard-8, ubicloud-standard-8-arm]
-    name: Ruby checks - ${{matrix.runs-on}}
-    runs-on: ${{matrix.runs-on}}
-    timeout-minutes: 25
-
+        arch: [x64, arm]
+        n: [1, 2, 3]
+    runs-on: ${{ matrix.arch == 'arm' && 'ubicloud-standard-4-arm' || 'ubicloud-standard-4' }}
+    timeout-minutes: 40
+    env:
+      KEY: speedtest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
     steps:
-    - name: Check out code
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        persist-credentials: false
-
-    - name: Set up Clover
-      uses: $/.github/actions/setup-clover
-      with:
-        setup-node: true
-
-    - name: Cache rubocop
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: /home/runner/.cache/rubocop_cache
-        key: ${{ matrix.runs-on }}-rubocop-cache-${{ hashFiles('Gemfile.lock', '.rubocop.yml') }}
-
-    - parallel:
-      - name: Run erb-formatter
-        run: bundle exec rake linter:erb_formatter
-
-      - name: Run rubocop
-        run: bundle exec rake linter:rubocop
-
-      - name: Run linter:openapi
-        run: bundle exec rake linter:openapi
-
-      - name: Run linter:xss_check
-        run: bundle exec rake linter:xss_check
-
-      - name: Run linter:cmd_exec
-        run: bundle exec rake linter:cmd_exec
-
-      - name: Run check_missing_admin_model_specs
-        run: bundle exec rake check_missing_admin_model_specs
-
-      - name: Run annotate
-        run: bundle exec rake annotate
-
-      - name: Refresh sequel caches
-        run: bundle exec rake refresh_sequel_caches
-
-    - name: Check that source code formatters and annotations make no changes
-      run: git diff --stat --exit-code
-
-    - name: Test migrating down
-      run: bundle exec rake _test_down VERSION=20250721
-
-    - name: Test migrating back up
-      run: bundle exec rake _test_up
-
-    - name: Check production puma loads
-      env:
-        CLOVER_DATABASE_URL: postgres:///clover_test?user=clover
-      run: ruby bin/production_check
-
-    - name: Run dataplane tests
-      run: bundle exec rake rhizome_spec
-
-    - name: Archive code coverage results
-      if: failure()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      with:
-        name: rhizome-code-coverage-report-${{ matrix.runs-on }}
-        path: coverage/
-
-  ruby-specs:
-    strategy:
-      fail-fast: false
-      matrix:
-        runs-on: [ubicloud-standard-8, ubicloud-standard-8-arm]
-        task: [default, frozen_spec]
-    name: Ruby specs - ${{matrix.task}} - ${{matrix.runs-on}}
-    runs-on: ${{matrix.runs-on}}
-    timeout-minutes: 25
-
-    steps:
-    - name: Check out code
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        persist-credentials: false
-
-    - name: Set up Clover
-      uses: $/.github/actions/setup-clover
-
-    - name: Cache spec runtimes
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: tmp/turbo_rspec_runtime.log
-        key: spec-runtime-${{ matrix.runs-on }}-${{ matrix.task }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: spec-runtime-${{ matrix.runs-on }}-${{ matrix.task }}-
-
-    - name: Run controlplane tests
-      run: bundle exec rake ${{ matrix.task }}
-
-    - name: Archive code coverage results
-      if: failure()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      with:
-        name: code-coverage-report-${{ matrix.task }}-${{ matrix.runs-on }}
-        path: coverage/
-
-    - name: Archive CLI golden-file diff
-      if: failure()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      with:
-        name: cli-golden-files-diff-${{ matrix.task }}-${{ matrix.runs-on }}
-        path: cli-golden-files.diff
-        if-no-files-found: ignore
+      - name: Runner info
+        run: |
+          date -u +%FT%TZ
+          jq -c '.[-1]' /home/runner/actions-runner/.setup_info || true
+          echo "ipv4=$(curl -4 -sS --max-time 5 https://ifconfig.me || echo none) ipv6=$(curl -6 -sS --max-time 5 https://ifconfig.me || echo none)"
+          systemctl status cache-proxy --no-pager | head -5 || true
+      - name: Cloudflare edge baseline
+        run: |
+          u=https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz
+          for f in 4 6; do
+            curl -$f -sS -o /dev/null --max-time 60 -D /tmp/h -w "EDGE IPv$f %{remote_ip} %{size_download}B %{speed_download}B/s %{time_total}s" "$u" || true
+            echo " $(grep -i cf-ray /tmp/h | tr -d '\r')"
+          done
+      - name: Restore start
+        run: echo "RESTORE_START=$(date +%s.%N)" >> "$GITHUB_ENV"
+      - name: Restore through cache-proxy
+        uses: actions/cache/restore@v4
+        with:
+          path: blob
+          key: ${{ env.KEY }}
+          fail-on-cache-miss: true
+      - name: Restore result
+        run: |
+          end=$(date +%s.%N)
+          bytes=$(stat -c %s blob/data.bin)
+          awk -v s="$RESTORE_START" -v e="$end" -v b="$bytes" 'BEGIN { printf "PROXY_RESTORE %d bytes %.1f s %.1f MB/s (includes zstd/tar)\n", b, e-s, b/(e-s)/1e6 }'
+      - name: Direct R2 download (no proxy)
+        run: |
+          set -a; . /etc/environment; set +a
+          auth="Authorization: Bearer: $UBICLOUD_RUNTIME_TOKEN"
+          version=$(curl -sS -H "$auth" "${UBICLOUD_CACHE_URL}caches?key=$KEY" | jq -r '.artifactCaches[0].cacheVersion')
+          url=$(curl -sS -H "$auth" "${UBICLOUD_CACHE_URL}cache?keys=$KEY&version=$version&runId=$GITHUB_RUN_ID" | jq -r .archiveLocation)
+          host=$(echo "$url" | cut -d/ -f3)
+          echo "R2 host A: $(dig +short A "$host" | tr '\n' ' ') AAAA: $(dig +short AAAA "$host" | tr '\n' ' ')"
+          for f in 4 6 4 6; do
+            curl -$f -sS -o /dev/null --max-time 300 -D /tmp/h -w "R2 IPv$f %{remote_ip} %{size_download}B %{speed_download}B/s ttfb=%{time_starttransfer}s total=%{time_total}s" "$url" || true
+            echo " $(grep -i cf-ray /tmp/h | tr -d '\r')"
+          done
+          echo "--- 8 parallel ranged GETs, default address family (like the proxy)"
+          size=$(curl -sS -r 0-0 -D - -o /dev/null "$url" | tr -d '\r' | awk -F/ 'tolower($0) ~ /^content-range/ {print $2}')
+          seg=$(( (size + 7) / 8 ))
+          start=$(date +%s.%N)
+          for i in 0 1 2 3 4 5 6 7; do
+            a=$((i * seg)); b=$(( (i + 1) * seg - 1 )); [ "$b" -ge "$size" ] && b=$((size - 1))
+            curl -sS -o /dev/null --max-time 300 -r "$a-$b" -w "seg$i %{remote_ip} %{speed_download}B/s %{time_total}s\n" "$url" &
+          done
+          wait
+          awk -v s="$start" -v e="$(date +%s.%N)" -v b="$size" 'BEGIN { printf "R2_PARALLEL8 %.1f s %.1f MB/s\n", e-s, b/(e-s)/1e6 }'
+      - name: cache-proxy log
+        if: always()
+        run: sudo journalctl -u cache-proxy --no-pager -o cat | grep -v '"Received request"' | sed -E 's/X-Amz-[A-Za-z-]+=[^&" ]*//g' | tail -60 || true
