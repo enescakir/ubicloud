@@ -5,6 +5,9 @@ on:
     inputs:
       size_mb:
         default: "1024"
+      mode:
+        description: all, speed, or netdiag
+        default: all
 
 permissions:
   contents: read
@@ -13,7 +16,86 @@ env:
   SIZE_MB: ${{ inputs.size_mb || '1024' }}
 
 jobs:
+  netdiag:
+    if: inputs.mode != 'speed'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm]
+        n: [1, 2]
+    runs-on: ${{ matrix.arch == 'arm' && 'ubicloud-standard-4-arm' || 'ubicloud-standard-4' }}
+    timeout-minutes: 30
+    env:
+      KEY: netdiag-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.n }}
+    steps:
+      - name: Runner info
+        run: |
+          date -u +%FT%TZ
+          jq -c '.[-1]' /home/runner/actions-runner/.setup_info || true
+          echo "ipv4=$(curl -4 -sS --max-time 5 https://ifconfig.me || echo none) ipv6=$(curl -6 -sS --max-time 5 https://ifconfig.me || echo none)"
+          ip -br addr; ip route; ip -6 route
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mtr-tiny traceroute dnsutils > /dev/null
+      - name: Make small blob
+        run: mkdir -p blob && head -c 1M /dev/urandom > blob/data.bin
+      - name: Save small entry
+        uses: actions/cache/save@v4
+        with:
+          path: blob
+          key: ${{ env.KEY }}
+      - name: Find R2 host
+        run: |
+          set -a; . /etc/environment; set +a
+          auth="Authorization: Bearer: $UBICLOUD_RUNTIME_TOKEN"
+          version=$(curl -sS -H "$auth" "${UBICLOUD_CACHE_URL}caches?key=$KEY" | jq -r '.artifactCaches[0].cacheVersion')
+          url=$(curl -sS -H "$auth" "${UBICLOUD_CACHE_URL}cache?keys=$KEY&version=$version&runId=$GITHUB_RUN_ID" | jq -r .archiveLocation)
+          host=$(echo "$url" | cut -d/ -f3)
+          echo "::add-mask::${host%%.*}"
+          echo "R2_HOST=$host" >> "$GITHUB_ENV"
+          echo "R2 host suffix: ${host#*.}"
+      - name: DNS
+        run: |
+          echo "--- resolv.conf"; grep -v '^#' /etc/resolv.conf
+          resolvectl status 2>/dev/null | grep -E "DNS Server|Current DNS|Protocols" || true
+          for r in "" @1.1.1.1 @8.8.8.8 @2606:4700:4700::1111; do
+            for t in A AAAA; do
+              echo "$t ${r:-local}: $(dig $r +time=3 +tries=1 +noall +answer +stats "$R2_HOST" $t | grep -E "IN|Query time" | awk '{print}' ORS=' | ')"
+            done
+          done
+          echo "--- Cloudflare resolver location (CH TXT id.server)"
+          dig @1.1.1.1 +short CH TXT id.server || true
+          echo "--- edge colo per family"
+          for f in 4 6; do
+            echo "R2 IPv$f: $(curl -$f -sS --max-time 10 "https://$R2_HOST/cdn-cgi/trace" | grep -E '^(ip|colo|http|tls|warp)=' | tr '\n' ' ')"
+            echo "nodejs IPv$f: $(curl -$f -sS --max-time 10 https://nodejs.org/cdn-cgi/trace | grep -E '^(colo|http)=' | tr '\n' ' ')"
+          done
+      - name: Connection timing
+        run: |
+          for f in 4 6; do
+            for i in 1 2 3 4 5; do
+              curl -$f -sS -o /dev/null --max-time 15 -w "R2 IPv$f %{remote_ip} dns=%{time_namelookup} tcp=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} code=%{http_code}\n" "https://$R2_HOST/" || true
+            done
+          done
+      - name: Ping
+        run: |
+          for f in 4 6; do
+            ping -$f -c 30 -i 0.2 -q "$R2_HOST" 2>&1 | tail -2 || true
+            ping -$f -c 30 -i 0.2 -q nodejs.org 2>&1 | tail -2 || true
+          done
+      - name: MTR TCP 443
+        run: |
+          for f in 4 6; do
+            echo "=== R2 IPv$f"; sudo mtr -$f -T -P 443 -n -b -r -w -c 30 "$R2_HOST" || true
+            echo "=== nodejs.org IPv$f"; sudo mtr -$f -T -P 443 -n -b -r -w -c 30 nodejs.org || true
+          done
+      - name: Traceroute with AS numbers
+        run: |
+          for f in 4 6; do
+            echo "=== R2 IPv$f"; sudo traceroute -$f -T -p 443 -A -q 1 -w 2 "$R2_HOST" || true
+          done
+
   seed:
+    if: inputs.mode != 'netdiag'
     strategy:
       matrix:
         arch: [x64, arm]
@@ -36,6 +118,7 @@ jobs:
           key: ${{ env.KEY }}
 
   restore:
+    if: inputs.mode != 'netdiag'
     needs: seed
     strategy:
       fail-fast: false
