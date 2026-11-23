@@ -6,7 +6,7 @@ on:
       size_mb:
         default: "1024"
       mode:
-        description: all, speed, or netdiag
+        description: all, speed, netdiag, or probe
         default: all
 
 permissions:
@@ -17,7 +17,7 @@ env:
 
 jobs:
   netdiag:
-    if: inputs.mode != 'speed'
+    if: inputs.mode == 'all' || inputs.mode == 'netdiag'
     strategy:
       fail-fast: false
       matrix:
@@ -95,7 +95,7 @@ jobs:
           done
 
   seed:
-    if: inputs.mode != 'netdiag'
+    if: inputs.mode == 'all' || inputs.mode == 'speed'
     strategy:
       matrix:
         arch: [x64, arm]
@@ -118,7 +118,7 @@ jobs:
           key: ${{ env.KEY }}
 
   restore:
-    if: inputs.mode != 'netdiag'
+    if: inputs.mode == 'all' || inputs.mode == 'speed'
     needs: seed
     strategy:
       fail-fast: false
@@ -181,3 +181,106 @@ jobs:
       - name: cache-proxy log
         if: always()
         run: sudo journalctl -u cache-proxy --no-pager -o cat | grep -v '"Received request"' | sed -E 's/X-Amz-[A-Za-z-]+=[^&" ]*//g' | tail -60 || true
+
+  probe-gen:
+    if: inputs.mode == 'probe'
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 30
+    outputs:
+      url: ${{ steps.url.outputs.url }}
+    env:
+      KEY: probe-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Runner info
+        run: |
+          date -u +%FT%TZ
+          jq -r '.[-1].detail' /home/runner/actions-runner/.setup_info | grep -E "^(Label|VM Host|Datacenter):" | tr '\n' ' '; echo
+      - name: Make blob
+        run: mkdir -p blob && head -c 512M /dev/urandom > blob/data.bin
+      - name: Save
+        uses: actions/cache/save@v4
+        with:
+          path: blob
+          key: ${{ env.KEY }}
+      - name: Get presigned URL
+        id: url
+        env:
+          PROBE_KEY: ${{ secrets.PROBE_KEY }}
+        run: |
+          set -a; . /etc/environment; set +a
+          auth="Authorization: Bearer: $UBICLOUD_RUNTIME_TOKEN"
+          version=$(curl -sS -H "$auth" "${UBICLOUD_CACHE_URL}caches?key=$KEY" | jq -r '.artifactCaches[0].cacheVersion')
+          curl -sS -H "$auth" "${UBICLOUD_CACHE_URL}cache?keys=$KEY&version=$version&runId=$GITHUB_RUN_ID" | jq -r .archiveLocation > /tmp/url
+          if [ -n "$PROBE_KEY" ]; then
+            enc=$(openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:PROBE_KEY -a -A -in /tmp/url)
+            echo "url=$enc" >> "$GITHUB_OUTPUT"
+          else
+            echo "PROBE_KEY secret is not set; remote probe skipped"
+          fi
+      - name: Connection scaling
+        run: |
+          url=$(cat /tmp/url)
+          size=$(curl -sS -r 0-0 -D - -o /dev/null "$url" | tr -d '\r' | awk -F/ 'tolower($0) ~ /^content-range/ {print $2}')
+          for n in 1 8 32 64 128; do
+            seg=$(( size / n )); start=$(date +%s.%N); rm -f /tmp/seg.*
+            for i in $(seq 0 $((n - 1))); do
+              a=$((i * seg)); b=$((a + seg - 1))
+              curl -sS -o /dev/null --max-time 30 -r "$a-$b" -w "%{size_download}\n" "$url" > /tmp/seg.$i 2>/dev/null &
+            done
+            wait
+            awk -v n="$n" -v s="$start" -v e="$(date +%s.%N)" '{ b += $1 } END { printf "SCALE n=%-3d %.1f s total %.1f MB/s per-conn %.2f MB/s\n", n, e-s, b/(e-s)/1e6, b/(e-s)/1e6/n }' /tmp/seg.*
+          done
+      - name: Other R2 account (nodejs.org cache miss)
+        run: |
+          for u in "https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz?cb=$RANDOM$RANDOM" https://nodejs.org/dist/v4.9.1/node-v4.9.1-linux-ppc64le.tar.xz https://nodejs.org/dist/v6.17.1/node-v6.17.1-linux-s390x.tar.xz; do
+            curl -sS -o /dev/null -D /tmp/h --max-time 60 -w "NODEJS %{size_download}B %{speed_download}B/s ttfb=%{time_starttransfer} " "$u"
+            grep -iE "^(cf-cache-status|cf-ray):" /tmp/h | tr -d '\r' | tr '\n' ' '; echo
+          done
+
+  probe-remote:
+    if: inputs.mode == 'probe' && needs.probe-gen.outputs.url != ''
+    needs: probe-gen
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, ubuntu-22.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Runner info
+        run: |
+          date -u +%FT%TZ
+          curl -sS --max-time 5 https://ipinfo.io | jq -c '{city, region, country, org}' || true
+      - name: Decrypt URL
+        env:
+          PROBE_KEY: ${{ secrets.PROBE_KEY }}
+          ENC: ${{ needs.probe-gen.outputs.url }}
+        run: echo "$ENC" | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:PROBE_KEY -a -A > /tmp/url && wc -c < /tmp/url
+      - name: Edge colo
+        run: |
+          host=$(cut -d/ -f3 /tmp/url)
+          echo "R2: $(curl -sS --max-time 10 "https://$host/cdn-cgi/trace" | grep -E '^(colo|http)=' | tr '\n' ' ')"
+          echo "nodejs: $(curl -sS --max-time 10 https://nodejs.org/cdn-cgi/trace | grep -E '^(colo|http)=' | tr '\n' ' ')"
+      - name: Single connection and scaling
+        run: |
+          url=$(cat /tmp/url)
+          for i in 1 2; do
+            curl -sS -o /dev/null --max-time 60 -D /tmp/h -w "R2 single %{remote_ip} %{size_download}B %{speed_download}B/s ttfb=%{time_starttransfer}s total=%{time_total}s" "$url" || true
+            echo " $(grep -i cf-ray /tmp/h | tr -d '\r')"
+          done
+          size=$(curl -sS -r 0-0 -D - -o /dev/null "$url" | tr -d '\r' | awk -F/ 'tolower($0) ~ /^content-range/ {print $2}')
+          for n in 8 32; do
+            seg=$(( size / n )); start=$(date +%s.%N); rm -f /tmp/seg.*
+            for i in $(seq 0 $((n - 1))); do
+              a=$((i * seg)); b=$((a + seg - 1))
+              curl -sS -o /dev/null --max-time 30 -r "$a-$b" -w "%{size_download}\n" "$url" > /tmp/seg.$i 2>/dev/null &
+            done
+            wait
+            awk -v n="$n" -v s="$start" -v e="$(date +%s.%N)" '{ b += $1 } END { printf "SCALE n=%-3d %.1f s total %.1f MB/s per-conn %.2f MB/s\n", n, e-s, b/(e-s)/1e6, b/(e-s)/1e6/n }' /tmp/seg.*
+          done
+      - name: Other R2 account (nodejs.org cache miss)
+        run: |
+          for u in "https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz?cb=$RANDOM$RANDOM" https://nodejs.org/dist/v4.9.1/node-v4.9.1-linux-ppc64le.tar.xz; do
+            curl -sS -o /dev/null -D /tmp/h --max-time 60 -w "NODEJS %{size_download}B %{speed_download}B/s ttfb=%{time_starttransfer} " "$u"
+            grep -iE "^(cf-cache-status|cf-ray):" /tmp/h | tr -d '\r' | tr '\n' ' '; echo
+          done
