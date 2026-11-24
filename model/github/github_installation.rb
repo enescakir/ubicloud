@@ -18,6 +18,7 @@ class GithubInstallation < Sequel::Model
   dataset_module Pagination
 
   CREATED_AT_CUTOFF = Time.utc(2000)
+  ERROR_NOTIFICATION_COOLDOWN = 7 * 24 * 60 * 60
 
   def self.with_github_installation_id(installation_id)
     first(installation_id:) { created_at > CREATED_AT_CUTOFF }
@@ -47,6 +48,26 @@ class GithubInstallation < Sequel::Model
 
   def client(**)
     Github.installation_client(installation_id, **)
+  end
+
+  # Returns whether to email the customer about the error. Notifies once
+  # per error until runners register again, with a reminder after the
+  # cooldown. A nil repository_id records an installation-wide error.
+  # The upsert lets only one of the concurrent callers notify.
+  def record_error_notification(error, repository_id = nil)
+    !DB[:github_error_notification]
+      .returning(:error)
+      .insert_conflict(
+        target: [:installation_id, :repository_id, :error],
+        update: {notified_at: Sequel[:excluded][:notified_at]},
+        update_where: Sequel[:github_error_notification][:notified_at] < Time.now - ERROR_NOTIFICATION_COOLDOWN,
+      )
+      .insert(installation_id: id, repository_id:, error:, notified_at: Time.now)
+      .empty?
+  end
+
+  def notification_emails
+    Authorization.allowed_accounts_dataset(project_id, "Project:github", project).select_map(:email)
   end
 
   def destroy_private_subnets

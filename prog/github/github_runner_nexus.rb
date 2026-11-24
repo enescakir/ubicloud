@@ -24,8 +24,6 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     "EFI stub: ERROR: Failed to decompress kernel",
   ].freeze
 
-  ERROR_NOTIFICATION_COOLDOWN = 7 * 24 * 60 * 60
-
   def self.assemble(installation, repository_name:, label:, actual_label: nil, default_branch: nil, schedule: nil)
     unless Github.runner_labels[label]
       fail "Invalid GitHub runner label: #{label}"
@@ -253,20 +251,8 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     nil
   end
 
-  # Notifies once per error until runners register again, with a reminder
-  # after the cooldown. A nil repository_id records an installation-wide
-  # error. The upsert lets only one of the concurrent runners notify.
   def notify_customer(error, repository_id, email_body, action_required: true)
-    notify = !DB[:github_error_notification]
-      .returning(:error)
-      .insert_conflict(
-        target: [:installation_id, :repository_id, :error],
-        update: {notified_at: Sequel[:excluded][:notified_at]},
-        update_where: Sequel[:github_error_notification][:notified_at] < Time.now - ERROR_NOTIFICATION_COOLDOWN,
-      )
-      .insert(installation_id: github_runner.installation_id, repository_id:, error:, notified_at: Time.now)
-      .empty?
-    return unless notify && (receivers = Authorization.allowed_accounts_dataset(project.id, "Project:github", project).select_map(:email)).any?
+    return unless installation.record_error_notification(error, repository_id) && (receivers = installation.notification_emails).any?
 
     repository_name = github_runner.repository_name
     Util.send_email(
