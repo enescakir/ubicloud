@@ -219,6 +219,43 @@ RSpec.describe Clover, "github" do
       expect(page.body).to eq({error: {message: "Must setup payment method before using Ubicloud runners"}}.to_json)
     end
 
+    describe "when a job waits for billing info" do
+      let(:project) { installation.project }
+
+      def add_user(email, action)
+        Account.create(email:).tap do |account|
+          account.add_project(project)
+          AccessControlEntry.create(project_id: project.id, subject_id: account.id, action_id: ActionType::NAME_MAP[action])
+        end
+      end
+
+      it "emails project users with GitHub access once" do
+        add_user("github-user@example.com", "Project:github")
+        add_user("billing-user@example.com", "Project:billing")
+
+        expect {
+          send_webhook("workflow_job", workflow_job_payload(action: "queued"))
+          send_webhook("workflow_job", workflow_job_payload(action: "queued"))
+        }.to change { Mail::TestMailer.deliveries.length }.from(0).to(1)
+
+        expect(page.body).to eq({error: {message: "Must setup payment method before using Ubicloud runners"}}.to_json)
+        mail = Mail::TestMailer.deliveries.last
+        expect(mail.to).to eq(["github-user@example.com"])
+        expect(mail.subject).to eq("Action Required: Add a payment method to use Ubicloud runners")
+        expect(mail.html_part.body).to include("A job in your &quot;my-repo&quot; repository is waiting for a Ubicloud runner.")
+        expect(mail.html_part.body).to include("#{Config.base_url}#{project.path}/github/setup")
+        expect(DB[:github_error_notification].select_map([:installation_id, :repository_id, :error])).to eq([[installation.id, nil, "billing_info_missing"]])
+      end
+
+      it "keeps no record if the email fails, so a later job tries again" do
+        add_user("github-user@example.com", "Project:github")
+        expect(Util).to receive(:send_email).and_raise(Net::ReadTimeout)
+
+        expect { send_webhook("workflow_job", workflow_job_payload(action: "queued")) }.to raise_error(Net::ReadTimeout)
+        expect(DB[:github_error_notification].count).to eq(0)
+      end
+    end
+
     it "fails if not queued and runner_id is empty" do
       send_webhook("workflow_job", workflow_job_payload(action: "in_progress", workflow_job: workflow_job_object(runner_id: nil)))
 

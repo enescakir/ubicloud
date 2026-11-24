@@ -135,6 +135,28 @@ class Clover
     end
   end
 
+  # The transaction rolls back the record if the email fails, so a later
+  # job tries again.
+  def notify_github_billing_info_missing(installation, repository_name)
+    DB.transaction do
+      if installation.record_error_notification("billing_info_missing") && (receivers = installation.notification_emails).any?
+        project = installation.project
+        Util.send_email(
+          receivers,
+          "Action Required: Add a payment method to use Ubicloud runners",
+          greeting: "Hello,",
+          body: [
+            "A job in your \"#{repository_name}\" repository is waiting for a Ubicloud runner. We can't start Ubicloud runners for your \"#{project.name}\" project until you add a payment method.",
+            "After you add a payment method, cancel the waiting workflow run and run it again. GitHub doesn't send waiting jobs to us again.",
+            "Please don't hesitate to reach out at support@ubicloud.com if you have any questions or need any help.",
+          ],
+          button_title: "Add Payment Method",
+          button_link: "#{Config.base_url}#{project.path}/github/setup",
+        )
+      end
+    end
+  end
+
   def update_github_runner_from_workflow_job(runner, job)
     runner.this.where(conclusion: nil).update(
       job_id: job["id"],
@@ -198,6 +220,7 @@ class Clover
     if action == "queued"
       unless installation.has_billing_info?
         Clog.emit("Github runner queue request without billing info", {github_runner_billing_info_missing: {installation_id: installation.id}})
+        notify_github_billing_info_missing(installation, repository_name)
         return {error: {message: "Must setup payment method before using Ubicloud runners"}}
       end
       check_cutoff(project: installation.project, web: false, status: 200)
